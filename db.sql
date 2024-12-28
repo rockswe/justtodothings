@@ -6,7 +6,6 @@ CREATE TABLE IF NOT EXISTS users (
     email           CITEXT NOT NULL UNIQUE,
     password_hash   TEXT   NOT NULL,
     is_verified     BOOLEAN NOT NULL DEFAULT false,
-    is_disabled     BOOLEAN NOT NULL DEFAULT false,
     terms_accepted  BOOLEAN NOT NULL DEFAULT false,
 
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
