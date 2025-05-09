@@ -1,0 +1,51 @@
+/auth
+  /github
+    GET
+    /callback
+      GET
+  /google
+    GET
+    /callback
+      GET
+  /connected-apps
+    /gmail
+      GET
+      DELETE
+      /callback
+        GET
+    /canvas
+      DELETE
+      POST
+/contact
+  POST
+/delete-account
+  POST
+/forgot-password
+  POST
+/login
+  POST
+/logout
+  POST
+/refresh-token
+  POST
+/reset-password
+  /{uuid}
+    POST
+/settings
+  GET
+  PATCH
+/signup
+  POST
+/tasks
+  POST
+  GET
+  DELETE
+  /{task_id}
+    PUT
+    DELETE
+    GET
+/verification
+  /{uuid}
+    GET
+/{proxy+}
+  ANY
