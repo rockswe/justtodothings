@@ -1,11 +1,11 @@
 "use strict";
 
-const AWS = require("aws-sdk");
+const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { Pool } = require("pg");
 const axios = require("axios");
 const crypto = require("crypto");
 
-const s3 = new AWS.S3();
+const s3 = new S3Client({});
 const pool = new Pool({
   host: process.env.DB_HOST,     
   port: process.env.DB_PORT || 5432,   
@@ -54,10 +54,13 @@ async function computeDelta(newData, bucketName, userId) {
   const key = `raw-data/canvas/${userId}/latest.json`;
   let oldData;
   try {
-    const existing = await s3.getObject({ Bucket: bucketName, Key: key }).promise();
-    oldData = JSON.parse(existing.Body.toString("utf-8"));
+    const getObjectParams = { Bucket: bucketName, Key: key };
+    const s3Object = await s3.send(new GetObjectCommand(getObjectParams));
+    // SDK v3 returns a stream, so we need to convert it to a string
+    const oldDataString = await s3Object.Body.transformToString("utf-8");
+    oldData = JSON.parse(oldDataString);
   } catch (err) {
-    if (err.code === "NoSuchKey") {
+    if (err.name === "NoSuchKey") { // Note: Error code might be different in v3, use err.name
       console.log(`No previous data for user ${userId}; first sync.`);
       return newData; // Everything is new.
     }
@@ -136,6 +139,7 @@ async function fetchCanvasData(domain, accessToken) {
         per_page: 100,
       },
     });
+    console.log("Raw courses data from API:", JSON.stringify(res.data)); // Log raw data
     courses = res.data.filter(course =>
       course.term &&
       course.term.start_at &&
@@ -150,6 +154,11 @@ async function fetchCanvasData(domain, accessToken) {
     }));
     console.log(`Fetched ${courses.length} courses.`);
   } catch (err) {
+    if (err.response) {
+      console.error(`Error fetching courses for domain ${domain}. Status: ${err.response.status}, Response: ${JSON.stringify(err.response.data)}, Message: ${err.message}`);
+    } else {
+      console.error(`Error fetching courses for domain ${domain}. No response received. Error details: Code: ${err.code}, Errno: ${err.errno}, Syscall: ${err.syscall}, Message: ${err.message}, Stack: ${err.stack}`);
+    }
     throw new Error(`Error fetching courses: ${err.message}`);
   }
 
@@ -540,12 +549,12 @@ async function processUserCanvasData(user) {
   });
   
   // Always update the latest aggregated data in S3.
-  await s3.putObject({
+  await s3.send(new PutObjectCommand({
     Bucket: process.env.S3_RAW_BUCKET,
     Key: `raw-data/canvas/${userId}/latest.json`,
     Body: JSON.stringify(aggregatedData, null, 2),
     ContentType: "application/json",
-  }).promise();
+  }));
   
   // If the delta is effectively empty (no new source_ids for relevant items), skip ChatGPT.
   const hasNewItemsForGPT = deltaData.some(course =>
