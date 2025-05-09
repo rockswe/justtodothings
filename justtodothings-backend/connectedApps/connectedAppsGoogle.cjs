@@ -89,7 +89,7 @@ async function fetchGmailData(userId, gmailCreds) {
   const oauth2Client = new google.auth.OAuth2(
     process.env.GMAIL_CLIENT_ID,
     process.env.GMAIL_CLIENT_SECRET,
-    "api.justtodothings.com/auth/google/callback"
+    "api.justtodothings.com/connectedApps/gmail/callback"
   );
   oauth2Client.setCredentials({
     access_token: gmailCreds.accessToken,
