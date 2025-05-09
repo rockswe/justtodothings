@@ -14,6 +14,7 @@ const pool = new Pool({
   database: process.env.DB_NAME,
   ssl: { rejectUnauthorized: true }
 });
+
 // ---------- Helper Functions ----------
 
 // Attach a stable source_id to each Canvas item.
@@ -46,11 +47,6 @@ function attachStableIds(aggregatedData) {
     }
   });
   return aggregatedData;
-}
-
-// Compute a SHA256 hash for an object.
-function computeHash(obj) {
-  return crypto.createHash("sha256").update(JSON.stringify(obj)).digest("hex");
 }
 
 // Retrieve previous aggregated data from S3 and compute a delta.
@@ -366,6 +362,7 @@ async function analyzeWithChatGPT(chatGPTInput) {
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
+          ...(process.env.OPENAI_ORGANIZATION_ID && { "OpenAI-Organization": process.env.OPENAI_ORGANIZATION_ID }),
         },
       }
     );
@@ -584,43 +581,74 @@ async function processUserCanvasData(user) {
   // Analyze the prepared data with ChatGPT to generate to-dos.
   const todosFromGPT = await analyzeWithChatGPT(chatGPTInput);
   
-  // Post-process todos to add titles for assignments
-  const todos = todosFromGPT.map(todo => {
-    if (todo.source_id && todo.source_id.startsWith("assignment-")) {
-      const assignmentId = todo.source_id.split('-')[1];
-      let assignmentName, courseCode, courseName;
+  // Post-process todos to add titles for assignments, announcements, and module items
+  const todos = todosFromGPT.map(currentTodo => {
+    let title;
+    let originalItemDetails = { name: null, type: null, course: null, moduleName: null };
 
-      // Find the assignment in aggregatedData to get its name and course details
-      for (const courseData of aggregatedData) {
-        if (courseData.assignments) {
-          const foundAssignment = courseData.assignments.find(a => String(a.id) === assignmentId);
-          if (foundAssignment) {
-            assignmentName = foundAssignment.name;
-            courseCode = courseData.course.course_code;
-            courseName = courseData.course.name;
-            break; 
+    // Search in aggregatedData for the item matching currentTodo.source_id
+    for (const courseData of aggregatedData) {
+      let found = false;
+      // Check assignments
+      if (courseData.assignments) {
+        const item = courseData.assignments.find(a => a.source_id === currentTodo.source_id);
+        if (item) {
+          originalItemDetails = { name: item.name, type: 'assignment', course: courseData.course, moduleName: null };
+          found = true;
+        }
+      }
+      if (found) break;
+
+      // Check announcements
+      if (courseData.announcements) {
+        const item = courseData.announcements.find(ann => ann.source_id === currentTodo.source_id);
+        if (item) {
+          originalItemDetails = { name: item.title, type: 'announcement', course: courseData.course, moduleName: null };
+          found = true;
+        }
+      }
+      if (found) break;
+
+      // Check module items
+      if (courseData.modules) {
+        for (const module of courseData.modules) {
+          if (module.items) {
+            const item = module.items.find(mi => mi.source_id === currentTodo.source_id);
+            if (item) {
+              originalItemDetails = { name: item.title, type: 'moduleItem', course: courseData.course, moduleName: module.module_name };
+              found = true;
+              break; // Found in module items, break from module loop
+            }
           }
         }
       }
-
-      if (assignmentName && courseCode && courseName) {
-        return {
-          ...todo,
-          title: `${assignmentName}: ${courseCode} (${courseName})`
-        };
-      } else {
-         // Fallback if assignment details are not found, though this should ideally not happen.
-         // Keep title potentially undefined so upsertTasks skips it if it's critical.
-         // Or, assign a generic title if preferred. For now, let's rely on upsertTasks to skip.
-        console.warn(`Could not find details for assignment source_id: ${todo.source_id}`);
-        return todo; // Return as is, title might be missing
-      }
+      if (found) break; // Found in this course, break from courseData loop
     }
-    // For non-assignment items, if ChatGPT somehow still provides a title, it would be kept.
-    // If not, and a title is mandatory, this is where a generic one could be added.
-    // However, the prompt now asks for only source_id, description, due_date.
-    // `upsertTasks` checks `if (!title || !source_id) continue;`
-    return todo;
+
+    if (originalItemDetails.course && originalItemDetails.name) {
+      const courseName = originalItemDetails.course.name;
+      const courseCode = originalItemDetails.course.course_code;
+      switch (originalItemDetails.type) {
+        case 'assignment':
+          title = `${originalItemDetails.name}: ${courseCode} (${courseName})`;
+          break;
+        case 'announcement':
+          title = `Review: "${originalItemDetails.name}" - ${courseCode} (${courseName})`;
+          break;
+        case 'moduleItem':
+          title = `Review: "${originalItemDetails.name}" (Module: ${originalItemDetails.moduleName}) - ${courseCode} (${courseName})`;
+          break;
+        default:
+          console.warn(`Unknown item type or missing details for source_id: ${currentTodo.source_id} while generating title.`);
+      }
+    } else {
+      console.warn(`Could not find original item details for source_id: ${currentTodo.source_id} to generate title.`);
+    }
+
+    return {
+      ...currentTodo,
+      title: title // title will be undefined if not generated, handled by upsertTasks
+    };
   });
 
   // Upsert the generated to-dos into the tasks table.
