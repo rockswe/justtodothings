@@ -1,0 +1,106 @@
+-- Enable required extensions
+CREATE EXTENSION IF NOT EXISTS citext;
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+-- Create (or ensure existence of) the enum for task priority
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'priority_level') THEN
+        CREATE TYPE priority_level AS ENUM ('low', 'medium', 'important');
+    END IF;
+END
+$$;
+
+-- Users table with additional settings fields
+CREATE TABLE IF NOT EXISTS users (
+    id                     BIGSERIAL PRIMARY KEY,
+    email                  CITEXT NOT NULL UNIQUE,
+    password_hash          TEXT   NOT NULL,
+    is_verified            BOOLEAN NOT NULL DEFAULT false,
+    is_disabled            BOOLEAN NOT NULL DEFAULT false,
+    terms_accepted         BOOLEAN NOT NULL DEFAULT false,
+    notifications_enabled  BOOLEAN NOT NULL DEFAULT true,
+    theme_preference       TEXT    NOT NULL DEFAULT 'light',
+    connected_apps         JSONB   NOT NULL DEFAULT '{}',
+
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Email verifications
+CREATE TABLE IF NOT EXISTS email_verifications (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     BIGINT       NOT NULL REFERENCES users(id),
+    activated   BOOLEAN      NOT NULL DEFAULT false,
+    expires_at  TIMESTAMPTZ  NOT NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- Password resets
+CREATE TABLE IF NOT EXISTS password_resets (
+    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     BIGINT       NOT NULL REFERENCES users(id),
+    used        BOOLEAN      NOT NULL DEFAULT false,
+    expires_at  TIMESTAMPTZ  NOT NULL,
+    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- Tasks table with new due_date field and source_id for Canvas items
+CREATE TABLE IF NOT EXISTS tasks (
+    id          BIGSERIAL      PRIMARY KEY,
+    user_id     BIGINT         NOT NULL REFERENCES users(id),
+    title       TEXT           NOT NULL,
+    description TEXT,
+    priority    priority_level NOT NULL DEFAULT 'low',
+    todo_order  INT            NOT NULL DEFAULT 0,
+    due_date    TIMESTAMPTZ,
+    source_id   TEXT, 
+    is_completed BOOLEAN       NOT NULL DEFAULT false,
+    
+    created_at  TIMESTAMPTZ    NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ    NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id        BIGINT       NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash     TEXT         NOT NULL, -- Store a hashed version of the token
+    user_agent     TEXT,                 -- Optional: for tracking device/browser
+    ip_address     INET,                 -- Optional: for tracking login origin
+    is_revoked     BOOLEAN      NOT NULL DEFAULT false,
+    expires_at     TIMESTAMPTZ  NOT NULL,
+    created_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
+);
+
+-- Optional index for efficient token lookup
+CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_refresh_tokens_token_hash ON refresh_tokens(token_hash);
+
+
+-- Create a unique index on tasks to prevent duplicate Canvas items
+CREATE UNIQUE INDEX IF NOT EXISTS tasks_unique_source_id
+    ON tasks(user_id, source_id);
+
+-- Timestamp update function
+CREATE OR REPLACE FUNCTION update_timestamp() 
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger to auto-update 'updated_at' in users table
+DROP TRIGGER IF EXISTS users_updated_at_trigger ON users;
+CREATE TRIGGER users_updated_at_trigger
+BEFORE UPDATE ON users 
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();
+
+-- Trigger to auto-update 'updated_at' in tasks table
+DROP TRIGGER IF EXISTS tasks_updated_at_trigger ON tasks;
+CREATE TRIGGER tasks_updated_at_trigger
+BEFORE UPDATE ON tasks
+FOR EACH ROW
+EXECUTE FUNCTION update_timestamp();

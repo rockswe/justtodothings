@@ -50,22 +50,22 @@ export function OpeningAnimation({ onComplete }: OpeningAnimationProps) {
       <div className="font-mono text-xl md:text-2xl lg:text-3xl text-gray-800 relative">
         <TypeAnimation
           sequence={[
-            "$ welcome!",
-            1000, // Pause for 1 second after "welcome!"
+            '$ just "to-do" things',
+            1000, // Pause for 1 second after "just to-do things"
             "$ ",
-            300,
-            "$ this is a to-do app, without some bs.",
+            150, // Reduced pause for the empty line
+            "$ inbox chaos → clear tasks",
             1000, // Pause for 1 second after this line
             "$ ",
-            300,
-            '$ just "to-do" things, description, and due date.',
+            150, // Reduced pause for the empty line
+            "$ deadlines handled for you",
             1000, // Pause for 1 second after this line
             "$ ",
-            300,
+            150,
             "$ example usage",
             1000, // Pause for 1 second after "example usage"
             "$ ",
-            300,
+            150,
           ]}
           wrapper="span"
           cursor={false}

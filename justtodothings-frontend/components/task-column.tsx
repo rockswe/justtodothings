@@ -10,6 +10,7 @@ import { TaskForm } from "./task-form"
 import { useTheme } from "../contexts/ThemeContext"
 import { useTasks } from "../contexts/TaskContext"
 import type { Task } from "@/services/api"
+import { useDraggable, useDroppable } from "@dnd-kit/core"
 
 interface TaskColumnProps {
   title: "low" | "medium" | "important"
@@ -22,6 +23,15 @@ export function TaskColumn({ title, todos }: TaskColumnProps) {
   const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null)
   const { theme } = useTheme()
   const { createTask, updateTask, deleteTask } = useTasks()
+
+  // Setup droppable area for this column
+  const { setNodeRef: setDroppableRef } = useDroppable({
+    id: `column-${title}`,
+    data: {
+      type: "column",
+      priority: title,
+    },
+  })
 
   const handleSubmit = async (task: {
     id?: number
@@ -77,65 +87,29 @@ export function TaskColumn({ title, todos }: TaskColumnProps) {
         </Button>
       </div>
 
-      {todos.length === 0 && (
-        <Card
-          className={`p-4 bg-transparent border ${theme === "dark" ? "border-white/20 text-white/60" : "border-black/20 text-black/60"} w-full`}
-        >
-          *blank*
-        </Card>
-      )}
-
-      {todos.map((task) => (
-        <Card
-          key={task.id}
-          className={`p-4 bg-transparent border ${theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"} cursor-pointer hover:bg-transparent w-full relative group`}
-          onClick={() => {
-            setEditingTaskId(task.id)
-            setIsFormOpen(true)
-          }}
-          onMouseEnter={() => setHoveredTaskId(task.id)}
-          onMouseLeave={() => setHoveredTaskId(null)}
-        >
-          <div className="space-y-2 break-words">
-            <h3 className={task.is_completed ? "line-through opacity-70" : ""}>{task.title}</h3>
-            <p
-              className={`text-sm ${theme === "dark" ? "text-white/60" : "text-black/60"} ${task.is_completed ? "line-through opacity-70" : ""}`}
-            >
-              {task.description}
-            </p>
-            <p
-              className={`text-xs ${theme === "dark" ? "text-white/40" : "text-black/40"} ${task.is_completed ? "line-through opacity-70" : ""}`}
-            >
-              {task.due_date
-                ? new Date(task.due_date).toLocaleString(undefined, {
-                    year: "numeric",
-                    month: "short",
-                    day: "numeric",
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })
-                : ""}
-            </p>
-          </div>
-
-          {/* Completion button that appears on hover */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className={`absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 p-1 ${
-              task.is_completed
-                ? theme === "dark"
-                  ? "bg-white/20 text-white hover:bg-white/10"
-                  : "bg-black/20 text-black hover:bg-black/10"
-                : "hover:bg-transparent"
-            }`}
-            onClick={(e) => handleToggleComplete(e, task)}
+      <div ref={setDroppableRef} className="w-full min-h-[200px] space-y-4">
+        {todos.length === 0 && (
+          <Card
+            className={`p-4 bg-transparent border ${theme === "dark" ? "border-white/20 text-white/60" : "border-black/20 text-black/60"} w-full`}
           >
-            <Check className={`h-4 w-4 ${task.is_completed ? "opacity-100" : "opacity-50"}`} />
-            <span className="sr-only">{task.is_completed ? "Mark as incomplete" : "Mark as complete"}</span>
-          </Button>
-        </Card>
-      ))}
+            *blank*
+          </Card>
+        )}
+
+        {todos.map((task) => (
+          <DraggableTaskCard
+            key={task.id}
+            task={task}
+            onEdit={() => {
+              setEditingTaskId(task.id)
+              setIsFormOpen(true)
+            }}
+            onToggleComplete={(e) => handleToggleComplete(e, task)}
+            onHover={(isHovered) => setHoveredTaskId(isHovered ? task.id : null)}
+            isHovered={hoveredTaskId === task.id}
+          />
+        ))}
+      </div>
 
       {isFormOpen && (
         <TaskForm
@@ -150,5 +124,87 @@ export function TaskColumn({ title, todos }: TaskColumnProps) {
         />
       )}
     </div>
+  )
+}
+
+interface DraggableTaskCardProps {
+  task: Task
+  onEdit: () => void
+  onToggleComplete: (e: React.MouseEvent) => void
+  onHover: (isHovered: boolean) => void
+  isHovered: boolean
+}
+
+function DraggableTaskCard({ task, onEdit, onToggleComplete, onHover, isHovered }: DraggableTaskCardProps) {
+  const { theme } = useTheme()
+
+  // Setup draggable for this task card
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDraggableRef,
+    isDragging,
+  } = useDraggable({
+    id: `task-${task.id}`,
+    data: {
+      type: "task",
+      task,
+    },
+  })
+
+  return (
+    <Card
+      ref={setDraggableRef}
+      {...listeners}
+      {...attributes}
+      className={`p-4 bg-transparent border ${
+        theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"
+      } cursor-grab hover:bg-transparent w-full relative group ${isDragging ? "opacity-50" : ""}`}
+      onClick={onEdit}
+      onMouseEnter={() => onHover(true)}
+      onMouseLeave={() => onHover(false)}
+    >
+      <div className="space-y-2 break-words">
+        <h3 className={task.is_completed ? "line-through opacity-70" : ""}>{task.title}</h3>
+        <p
+          className={`text-sm ${theme === "dark" ? "text-white/60" : "text-black/60"} ${task.is_completed ? "line-through opacity-70" : ""}`}
+        >
+          {task.description}
+        </p>
+        <p
+          className={`text-xs ${theme === "dark" ? "text-white/40" : "text-black/40"} ${task.is_completed ? "line-through opacity-70" : ""}`}
+        >
+          {task.due_date
+            ? new Date(task.due_date).toLocaleString(undefined, {
+                year: "numeric",
+                month: "short",
+                day: "numeric",
+                hour: "2-digit",
+                minute: "2-digit",
+              })
+            : ""}
+        </p>
+      </div>
+
+      {/* Completion button that appears on hover */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className={`absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 p-1 ${
+          task.is_completed
+            ? theme === "dark"
+              ? "bg-white/20 text-white hover:bg-white/10"
+              : "bg-black/20 text-black hover:bg-black/10"
+            : "hover:bg-transparent"
+        }`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onToggleComplete(e)
+        }}
+      >
+        <Check className={`h-4 w-4 ${task.is_completed ? "opacity-100" : "opacity-50"}`} />
+        <span className="sr-only">{task.is_completed ? "Mark as incomplete" : "Mark as complete"}</span>
+      </Button>
+    </Card>
   )
 }

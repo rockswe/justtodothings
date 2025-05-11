@@ -3,8 +3,8 @@
 import type React from "react"
 
 import Link from "next/link"
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useEffect } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -22,6 +22,47 @@ export default function LoginPage() {
   const router = useRouter()
   const { theme } = useTheme()
   const { login, isLoading } = useAuth()
+  const searchParams = useSearchParams()
+
+  // Handle error parameters from OAuth redirects
+  useEffect(() => {
+    const error = searchParams.get("error")
+
+    if (error) {
+      let errorMessage = "Authentication failed"
+
+      // Map error codes to user-friendly messages
+      switch (error) {
+        case "invalid_state":
+          errorMessage = "Security validation failed. Please try again."
+          break
+        case "github_no_verified_email":
+        case "google_no_email":
+          errorMessage = "No verified email found. Please verify your email first."
+          break
+        case "account_disabled":
+          errorMessage = "Your account has been disabled."
+          break
+        case "github_missing_code":
+        case "google_missing_code":
+          errorMessage = "Authentication process was interrupted. Please try again."
+          break
+        case "github_api_error":
+        case "google_api_error":
+          errorMessage = "Service temporarily unavailable. Please try again later."
+          break
+        default:
+          errorMessage = "Authentication failed. Please try again."
+      }
+
+      setLoginError(errorMessage)
+
+      // Remove the error parameter
+      const url = new URL(window.location.href)
+      url.searchParams.delete("error")
+      router.replace(url.pathname + url.search)
+    }
+  }, [searchParams, router])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -169,7 +210,7 @@ export default function LoginPage() {
               onClick={handleGoogleLogin}
             >
               <Mail className="w-5 h-5" />
-              login with gmail
+              login with google
             </Button>
           </form>
 

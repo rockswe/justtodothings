@@ -7,35 +7,56 @@
     GET
     /callback
       GET
-  /connected-apps
-    /gmail
+
+/connected-apps
+  /github
+    GET
+    DELETE
+    /callback
       GET
-      DELETE
-      /callback
-        GET
-    /canvas
-      DELETE
-      POST
+  /gmail
+    DELETE
+    GET
+    /callback
+      GET
+  /slack
+    DELETE
+    GET
+    /callback
+      GET
+  /canvas
+    DELETE
+    POST
+
 /contact
   POST
+
 /delete-account
   POST
+
 /forgot-password
   POST
+
 /login
   POST
+
 /logout
   POST
+
 /refresh-token
   POST
+
 /reset-password
   /{uuid}
     POST
+
 /settings
   GET
   PATCH
+
 /signup
   POST
+
 /tasks
   POST
   GET
@@ -44,8 +65,10 @@
     PUT
     DELETE
     GET
+
 /verification
   /{uuid}
     GET
-/{proxy+}
+
+/proxy+
   ANY

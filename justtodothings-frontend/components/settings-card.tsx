@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
-import { X } from "lucide-react"
+import { X, BookOpen, Mail, Github, Slack } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useTheme } from "../contexts/ThemeContext"
 import { CanvasLMSInstructions } from "./canvas-lms-instructions"
@@ -29,7 +29,7 @@ interface SettingsCardProps {
 }
 
 type Category = "general" | "connectedApps"
-type ConnectedApp = "canvas" | "gmail"
+type ConnectedApp = "canvas" | "gmail" | "github" | "slack"
 
 export function SettingsCard({
   onClose,
@@ -115,6 +115,8 @@ export function SettingsCard({
       return
     }
 
+    const effectiveApiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.justtodothings.com";
+
     if (isAppConnected(app)) {
       // Disconnect the app
       handleDisconnectApp(app)
@@ -124,7 +126,11 @@ export function SettingsCard({
       if (app === "canvas") {
         setShowCanvasInstructions(true)
       } else if (app === "gmail") {
-        handleGmailConnect()
+        window.location.href = new URL('/connected-apps/gmail', effectiveApiUrl).href;
+      } else if (app === "github") {
+        window.location.href = new URL('/connected-apps/github', effectiveApiUrl).href;
+      } else if (app === "slack") {
+        window.location.href = new URL('/connected-apps/slack', effectiveApiUrl).href;
       }
     }
   }
@@ -166,6 +172,10 @@ export function SettingsCard({
         await connectedAppsAPI.disconnectCanvas()
       } else if (app === "gmail") {
         await connectedAppsAPI.disconnectGmail()
+      } else if (app === "github") {
+        await connectedAppsAPI.disconnectGitHub()
+      } else if (app === "slack") {
+        await connectedAppsAPI.disconnectSlack()
       }
 
       // Refresh settings to ensure we have the latest data
@@ -192,16 +202,11 @@ export function SettingsCard({
     return !!userSettings.connected_apps[app]
   }
 
-  const handleGmailConnect = () => {
-    if (isSignedUp) {
-      // Redirect to Gmail OAuth flow
-      window.location.href = `${process.env.NEXT_PUBLIC_API_URL}/auth/google`
-    }
-  }
-
   return (
     <Card
-      className={`w-full max-w-7xl ${theme === "dark" ? "bg-[#1a1a1a] border-white/20 text-white" : "bg-white border-black/20 text-black"}`}
+      className={`w-full max-w-5xl mx-auto max-h-[80vh] flex flex-col ${
+        theme === "dark" ? "bg-[#1a1a1a] border-white/20 text-white" : "bg-white border-black/20 text-black"
+      }`}
     >
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="text-2xl font-normal">settings</CardTitle>
@@ -210,25 +215,27 @@ export function SettingsCard({
           <span className="sr-only">Close</span>
         </Button>
       </CardHeader>
-      <CardContent className="flex p-6">
-        <div className={`w-1/3 border-r ${theme === "dark" ? "border-white/20" : "border-black/20"} pr-6 space-y-2`}>
+      <CardContent className="flex flex-col md:flex-row p-4 flex-1 overflow-y-auto">
+        <div
+          className={`w-full md:w-1/4 space-y-1 pb-4 md:pb-0 border-b ${theme === "dark" ? "border-white/20" : "border-black/20"} md:border-b-0 md:border-r ${theme === "dark" ? "border-white/20" : "border-black/20"} md:pr-4`}
+        >
           <Button
             variant="ghost"
-            className="w-full justify-start py-2 px-4 text-sm whitespace-normal text-left"
+            className="w-full justify-center py-1 px-2 text-sm whitespace-normal"
             onClick={() => setActiveCategory("general")}
           >
             general
           </Button>
           <Button
             variant="ghost"
-            className="w-full justify-start py-2 px-4 text-sm whitespace-normal text-left"
+            className="w-full justify-center py-1 px-2 text-sm whitespace-normal"
             onClick={() => setActiveCategory("connectedApps")}
           >
             connected apps
           </Button>
         </div>
 
-        <div className="w-2/3 pl-6 space-y-6">
+        <div className="w-full md:w-3/4 md:pl-5 pt-4 md:pt-0 space-y-6 overflow-y-auto pb-4">
           {activeCategory === "general" && (
             <div className="space-y-6">
               <div className="flex justify-between items-center">
@@ -292,7 +299,10 @@ export function SettingsCard({
           {activeCategory === "connectedApps" && (
             <div className="space-y-6">
               <div>
-                <h3 className="font-semibold mb-2">canvas lms</h3>
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <BookOpen className="h-4 w-4" />
+                  <span>canvas lms</span>
+                </h3>
                 <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
                   follow your university course pace with AI-powered automation. context-aware task generation, where
                   student productivity is boosted by providing personalized insights, such as relevant assignment
@@ -304,7 +314,11 @@ export function SettingsCard({
                   onClick={() => handleAppConnection("canvas")}
                   disabled={isLoading}
                 >
-                  {isLoading ? "processing..." : isAppConnected("canvas") ? "disconnect" : "connect"}
+                  {isLoading && selectedApp === "canvas"
+                    ? "processing..."
+                    : isAppConnected("canvas")
+                      ? "disconnect"
+                      : "connect"}
                 </Button>
                 {isAppConnected("canvas") && userSettings?.connected_apps?.canvas && (
                   <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
@@ -313,7 +327,10 @@ export function SettingsCard({
                 )}
               </div>
               <div>
-                <h3 className="font-semibold mb-2">gmail</h3>
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <Mail className="h-4 w-4" />
+                  <span>gmail</span>
+                </h3>
                 <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
                   justtodothings simplifies task management by seamlessly integrating gmail with AI. the AI analyzes
                   your recent emails, extracts key points, and generates concise to-dos, helping you stay organized and
@@ -325,11 +342,69 @@ export function SettingsCard({
                   onClick={() => handleAppConnection("gmail")}
                   disabled={isLoading}
                 >
-                  {isLoading ? "processing..." : isAppConnected("gmail") ? "disconnect" : "connect"}
+                  {isLoading && selectedApp === "gmail"
+                    ? "processing..."
+                    : isAppConnected("gmail")
+                      ? "disconnect"
+                      : "connect"}
                 </Button>
                 {isAppConnected("gmail") && userSettings?.connected_apps?.gmail && (
                   <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
                     connected to {userSettings.connected_apps.gmail.email}
+                  </p>
+                )}
+              </div>
+              <div>
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <Github className="h-4 w-4" />
+                  <span>github</span>
+                </h3>
+                <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
+                  connect your github account to automatically create tasks from issues and pull requests. stay on top
+                  of your development workflow by tracking code reviews, issue assignments, and project milestones.
+                </p>
+                <Button
+                  variant={isAppConnected("github") ? "destructive" : "outline"}
+                  className={`w-full ${isAppConnected("github") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+                  onClick={() => handleAppConnection("github")}
+                  disabled={isLoading}
+                >
+                  {isLoading && selectedApp === "github"
+                    ? "processing..."
+                    : isAppConnected("github")
+                      ? "disconnect"
+                      : "connect"}
+                </Button>
+                {isAppConnected("github") && userSettings?.connected_apps?.github && (
+                  <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
+                    connected as {userSettings.connected_apps.github.login}
+                  </p>
+                )}
+              </div>
+              <div>
+                <h3 className="font-semibold mb-2 flex items-center gap-2">
+                  <Slack className="h-4 w-4" />
+                  <span>slack</span>
+                </h3>
+                <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
+                  integrate with slack to turn messages into actionable tasks. never miss important requests from your
+                  team and keep track of your commitments across channels and direct messages.
+                </p>
+                <Button
+                  variant={isAppConnected("slack") ? "destructive" : "outline"}
+                  className={`w-full ${isAppConnected("slack") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
+                  onClick={() => handleAppConnection("slack")}
+                  disabled={isLoading}
+                >
+                  {isLoading && selectedApp === "slack"
+                    ? "processing..."
+                    : isAppConnected("slack")
+                      ? "disconnect"
+                      : "connect"}
+                </Button>
+                {isAppConnected("slack") && userSettings?.connected_apps?.slack && (
+                  <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
+                    connected to workspace {userSettings.connected_apps.slack.team_id}
                   </p>
                 )}
               </div>

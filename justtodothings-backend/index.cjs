@@ -11,7 +11,10 @@ const {
     getSettings, updateSettings
 } = require("./controllers/settingsController.cjs");
 const {
-    connectCanvas, disconnectCanvas, connectGmail, disconnectGmail
+    connectCanvas, disconnectCanvas,
+    connectGmailRedirect, connectGmail, disconnectGmail,
+    connectGitHubRedirect, connectGitHub, disconnectGitHub,
+    connectSlackRedirect, connectSlack, disconnectSlack
 } = require("./controllers/connectedAppsController.cjs");
 const { handleContact } = require("./controllers/contactController.cjs");
 const { buildResponse } = require("./utils/responseHelper.cjs");
@@ -65,21 +68,44 @@ exports.handler = async (event) => {
         return await updateSettings(event);
       }
 
-      // Connect Canvas and Google
+      // Connected Apps
     if (path === "/connected-apps/canvas" && httpMethod === "POST") {
         return await connectCanvas(event);
-      }
-    if (path === "/connected-apps/gmail/callback" && httpMethod === "GET") {
-        return await connectGmail(event); // This path was /connected-apps/gmail in original, but handler name connectGmail implies callback
-      }
-
-      // Disconnect Canvas and Google
+    }
     if (path === "/connected-apps/canvas" && httpMethod === "DELETE") {
         return await disconnectCanvas(event);
-      }
+    }
+
+    if (path === "/connected-apps/gmail" && httpMethod === "GET") { // New Route
+        return await connectGmailRedirect(event);
+    }
+    if (path === "/connected-apps/gmail/callback" && httpMethod === "GET") {
+        return await connectGmail(event);
+    }
     if (path === "/connected-apps/gmail" && httpMethod === "DELETE") {
         return await disconnectGmail(event);
-      }
+    }
+
+    if (path === "/connected-apps/github" && httpMethod === "GET") { // New Route
+        return await connectGitHubRedirect(event);
+    }
+    if (path === "/connected-apps/github/callback" && httpMethod === "GET") { // New Route
+        return await connectGitHub(event);
+    }
+    if (path === "/connected-apps/github" && httpMethod === "DELETE") {
+        return await disconnectGitHub(event);
+    }
+
+    if (path === "/connected-apps/slack" && httpMethod === "GET") { // New Route
+        return await connectSlackRedirect(event);
+    }
+    if (path === "/connected-apps/slack/callback" && httpMethod === "GET") { // New Route
+        return await connectSlack(event);
+    }
+    if (path === "/connected-apps/slack" && httpMethod === "DELETE") {
+        return await disconnectSlack(event);
+    }
+
 
       // Delete Account
     if (path === "/delete-account" && httpMethod === "POST") {

@@ -139,17 +139,27 @@ async function fetchCanvasData(domain, accessToken) {
         per_page: 100,
       },
     });
-    console.log("Raw courses data from API:", JSON.stringify(res.data)); // Log raw data
-    courses = res.data.filter(course =>
-      course.term &&
-      course.term.start_at &&
-      course.term.end_at &&
-      course.term.start_at <= now &&
-      course.term.end_at >= now
-    ).map(course => ({
+    courses = res.data.filter(course => {
+      const termStart = course.term?.start_at;
+      const termEnd = course.term?.end_at;
+      const courseStart = course.start_at;
+      const courseEnd = course.end_at;
+
+      // Scenario 1: Valid term dates define the course period
+      if (termStart && termEnd) {
+        return termStart <= now && termEnd >= now;
+      }
+
+      // Scenario 2: Term dates are not definitive. Rely on course-level dates or assume ongoing.
+      const started = !courseStart || courseStart <= now;
+      const notEnded = !courseEnd || courseEnd >= now;
+
+      return started && notEnded;
+
+    }).map(course => ({
       id: course.id,
       name: course.name,
-      term_name: course.term.name,
+      term_name: course.term?.name || 'N/A',
       course_code: course.course_code
     }));
     console.log(`Fetched ${courses.length} courses.`);
@@ -350,6 +360,14 @@ function computePerformanceSummary(assignments) {
 
 async function analyzeWithChatGPT(chatGPTInput) {
   const prompt = buildChatGPTPrompt(chatGPTInput);
+  const model = process.env.OPENAI_MODEL || "o4-mini";
+  const apiKey = process.env.OPENAI_API_KEY;
+  const orgId = process.env.OPENAI_ORGANIZATION_ID;
+
+  console.log(`Attempting to use OpenAI model: ${model}`);
+  console.log(`OpenAI API Key found: ${!!apiKey}, First 5 chars: ${apiKey ? apiKey.substring(0, 5) : 'N/A'}`);
+  console.log(`OpenAI Organization ID found: ${!!orgId}`);
+
   try {
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -365,7 +383,7 @@ async function analyzeWithChatGPT(chatGPTInput) {
             content: prompt,
           },
         ],
-        temperature: 0.7,
+        temperature: 1,
       },
       {
         headers: {
@@ -383,7 +401,16 @@ async function analyzeWithChatGPT(chatGPTInput) {
     console.log(`ChatGPT returned ${todos.length} todos.`);
     return todos;
   } catch (err) {
-    throw new Error(`Error analyzing data with ChatGPT: ${err.message}`);
+    let errorDetails = `Error analyzing data with ChatGPT: ${err.message}`;
+    if (err.response) {
+      errorDetails += ` | Status: ${err.response.status} | Data: ${JSON.stringify(err.response.data)}`;
+      console.error(`OpenAI API Error Status: ${err.response.status}`);
+      console.error(`OpenAI API Error Data: ${JSON.stringify(err.response.data)}`);
+    } else {
+      console.error(`OpenAI API Error: No response object. Message: ${err.message}`);
+    }
+    console.error(`Full error in analyzeWithChatGPT: ${errorDetails}`, err.stack);
+    throw new Error(errorDetails); // Re-throw with more details
   }
 }
 

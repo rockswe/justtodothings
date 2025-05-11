@@ -142,7 +142,7 @@ export function TaskForm({ onSubmit, onClose, onDelete, editTask, priority }: Ta
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-lg break-words max-w-[80%]">{editTask ? "edit task" : "add task"}</h3>
         <div className="flex items-center gap-2">
-          {editTask && onDelete && (
+          {editTask && onDelete ? (
             <Button
               variant="ghost"
               size="sm"
@@ -151,6 +151,15 @@ export function TaskForm({ onSubmit, onClose, onDelete, editTask, priority }: Ta
                 onDelete(editTask.id)
                 onClose()
               }}
+            >
+              <Trash2 className="w-4 h-4" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="sm"
+              className={`${theme === "dark" ? "text-white hover:bg-white/10" : "text-black hover:bg-black/10"}`}
+              onClick={onClose}
             >
               <Trash2 className="w-4 h-4" />
             </Button>

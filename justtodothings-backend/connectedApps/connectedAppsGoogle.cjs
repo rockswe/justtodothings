@@ -1,308 +1,221 @@
 "use strict";
 
-const AWS = require("aws-sdk");
+// MODIFIED: Use AWS SDK v3 for S3
+const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3"); // Added GetObjectCommand just in case, though not used in final code for this request
 const { Pool } = require("pg");
-const axios = require("axios");
-const crypto = require("crypto");
 const { google } = require("googleapis");
 
-// Environment variables (set in AWS console or via Parameter Store/Secrets Manager):
+// Environment variables:
 //   DATABASE_URL
 //   S3_RAW_BUCKET
-//   OPENAI_API_KEY
-//   OPENAI_MODEL
-
-// Optionally, store client secrets in environment variables, or in connected_apps JSON per user:
 //   GMAIL_CLIENT_ID
 //   GMAIL_CLIENT_SECRET
-//   (or fetch them from Secrets Manager)
+//   (GMAIL_REDIRECT_URI is used by connectGmail in controller, but not strictly here if oauth2Client is for refresh)
 
-const s3 = new AWS.S3();
+// MODIFIED: S3 client instantiation for v3
+const s3 = new S3Client({});
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
 });
 
-// ---------- Helper Functions ----------
-
-// Attach stable source_id to each Gmail message.
-function attachStableIds(gmailData) {
-  // gmailData is an array of message objects with { id, threadId, snippet, payload, ... }
-  // We add a 'source_id' field like "gmail-<messageId>"
-  gmailData.forEach(msg => {
-    msg.source_id = `gmail-${msg.id}`;
-  });
-  return gmailData;
-}
-
-// Retrieve previous aggregated data from S3 and compute a delta.
-async function computeDelta(newData, bucketName, userId) {
-  const key = `raw-data/gmail/${userId}/latest.json`;
-  let oldData;
-
-  try {
-    const existing = await s3.getObject({ Bucket: bucketName, Key: key }).promise();
-    oldData = JSON.parse(existing.Body.toString("utf-8"));
-  } catch (err) {
-    if (err.code === "NoSuchKey") {
-      console.log(`[GmailSync] No previous data for user ${userId}; first sync.`);
-      return newData; // Everything is new.
-    }
-    throw err;
-  }
-
-  // Build a set of source_ids from old data.
-  const oldSourceIds = new Set(oldData.map(item => item.source_id));
-
-  // Filter out items already present
-  const deltaData = newData.filter(item => !oldSourceIds.has(item.source_id));
-  return deltaData;
-}
-
-// Upsert tasks into the database using the stable source_id.
-async function upsertTasks(client, userId, todos) {
-  const now = new Date().toISOString();
-  for (const todo of todos) {
-    const { title, description, due_date, source_id } = todo;
-    if (!title || !source_id) continue;
-
-    const query = `
-      INSERT INTO tasks (user_id, title, description, priority, due_date, created_at, updated_at, source_id)
-      VALUES ($1, $2, $3, 'medium', $4, $5, $5, $6)
-      ON CONFLICT (user_id, source_id) DO NOTHING
-      RETURNING id
-    `;
-    const values = [userId, title.trim(), description ? description.trim() : "", due_date || null, now, source_id];
-
-    try {
-      await client.query(query, values);
-    } catch (err) {
-      console.error(`[GmailSync] Error upserting task for user ${userId} (source_id: ${source_id}): ${err.message}`);
-    }
-  }
-}
-
-// ---------- Gmail Data Fetching ----------
-
-async function fetchGmailData(userId, gmailCreds) {
-  // gmailCreds might look like: { accessToken, refreshToken, ... }
-  // We'll use googleapis to fetch messages
+// ---------- Gmail Data Fetching (Modified for full content and token refresh) ----------
+async function fetchGmailData(userId, gmailCreds, dbClient) { // ADDED: dbClient for token updates
   const oauth2Client = new google.auth.OAuth2(
     process.env.GMAIL_CLIENT_ID,
-    process.env.GMAIL_CLIENT_SECRET,
-    "api.justtodothings.com/connectedApps/gmail/callback"
+    process.env.GMAIL_CLIENT_SECRET
+    // GMAIL_REDIRECT_URI is not strictly required for server-side token refresh if refresh_token is present
   );
   oauth2Client.setCredentials({
     access_token: gmailCreds.accessToken,
     refresh_token: gmailCreds.refreshToken,
   });
 
-  // Attempt token refresh if needed
-  // googleapis automatically refreshes if the token is expired,
-  // but you can also manually handle refresh if you want to store new tokens in DB.
-  // e.g., let newTokens = await oauth2Client.getAccessToken() { ... update DB ... }
+  let newAccessToken; // To store new token if refreshed
+  oauth2Client.on('tokens', (tokens) => {
+    if (tokens.access_token) {
+      console.log(`[GmailSync] User ${userId}: New access token received.`);
+      newAccessToken = tokens.access_token;
+    }
+    // Optional: Handle new refresh_token if provided by Google
+    // if (tokens.refresh_token) {
+    //   console.log(`[GmailSync] User ${userId}: New refresh token received.`);
+    //   // Logic to store the new refresh_token in the database would go here.
+    // }
+  });
 
   const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-  // 1. List messages
-  // For example, we fetch the last 50 messages from the inbox
-  // Adjust query or maxResults as needed
+  // Fetch recent messages. Consider making maxResults configurable or using historyId for true delta sync.
   const listRes = await gmail.users.messages.list({
     userId: "me",
-    maxResults: 50,
-    q: "", // e.g., you can filter by date or label
+    maxResults: 20, // Example: fetch last 20 messages. Adjust as needed.
+    // q: "is:unread", // Example: to fetch only unread messages.
   });
 
-  if (!listRes.data.messages) {
-    console.log(`[GmailSync] User ${userId} has no messages to process.`);
+  // Helper function to update token in DB
+  const updateTokenInDb = async (tokenToUpdate) => {
+    // Ensure dbClient is valid and token has actually changed
+    if (dbClient && gmailCreds.accessToken !== tokenToUpdate) {
+      try {
+        await dbClient.query(
+          `UPDATE users
+           SET connected_apps = jsonb_set(connected_apps, '{gmail,accessToken}', $1::jsonb, true)
+           WHERE id = $2 AND (connected_apps->'gmail'->>'accessToken' IS NULL OR connected_apps->'gmail'->>'accessToken' <> $3)`,
+          [`"${tokenToUpdate}"`, userId, tokenToUpdate]
+        );
+        console.log(`[GmailSync] User ${userId}: Updated new access token "${tokenToUpdate.substring(0,10)}..." in DB.`);
+        gmailCreds.accessToken = tokenToUpdate; // Update in-memory creds for current run
+      } catch (dbError) {
+        console.error(`[GmailSync] User ${userId}: Failed to update new access token in DB:`, dbError);
+      }
+    }
+  };
+
+  if (!listRes.data.messages || listRes.data.messages.length === 0) {
+    console.log(`[GmailSync] User ${userId}: No messages found matching query.`);
+    if (newAccessToken) { // Token might have been refreshed even if no messages
+      await updateTokenInDb(newAccessToken);
+    }
     return [];
   }
 
-  const messages = listRes.data.messages; // array of { id, threadId }
+  const messages = listRes.data.messages; // Array of { id, threadId }
 
-  // 2. Fetch message details in parallel
-  // Make sure not to exceed rate limits. For demonstration, we do Promise.all
-  const messageDetails = await Promise.all(
-    messages.map(async (msg) => {
-      try {
-        const msgRes = await gmail.users.messages.get({ userId: "me", id: msg.id, format: "full" });
-        // Return relevant fields
-        return {
-          id: msg.id,
-          threadId: msg.threadId,
-          snippet: msgRes.data.snippet || "",
-          payload: msgRes.data.payload || {},
-          internalDate: msgRes.data.internalDate || null,
-        };
-      } catch (err) {
-        console.warn(`[GmailSync] Failed to fetch message ${msg.id} for user ${userId}: ${err.message}`);
-        return null;
+  const messageDetailsPromises = messages.map(async (msg) => {
+    try {
+      const msgRes = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "full", // MODIFIED: Fetch full message payload
+      });
+      return msgRes.data; // MODIFIED: Return the entire message object
+    } catch (err) {
+      console.warn(`[GmailSync] Failed to fetch message details for ${msg.id}, user ${userId}: ${err.message}`);
+      if (err.code === 401 && newAccessToken) { // Check if auth error and token was refreshed
+          console.warn(`[GmailSync] User ${userId}: Encountered 401, new token was available. Will be updated if not already.`);
       }
-    })
-  );
-
-  // Filter out null (failed fetches)
-  return messageDetails.filter(m => m !== null);
-}
-
-// ---------- ChatGPT Analysis ----------
-
-async function analyzeWithChatGPT(gmailData) {
-  const prompt = buildChatGPTPrompt(gmailData);
-
-  try {
-    const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: process.env.OPENAI_MODEL || "gpt-4o-2024-08-06",
-        messages: [
-          {
-            role: "system",
-            content: "You are an assistant that summarizes Gmail messages into concise to-do items. Return only actionable tasks.",
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-        temperature: 0.7,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const content = response.data?.choices?.[0]?.message?.content?.trim();
-    const todos = JSON.parse(content);
-    if (!Array.isArray(todos)) {
-      throw new Error("ChatGPT response did not return an array of todos.");
+      return null;
     }
-    console.log(`[GmailSync] ChatGPT returned ${todos.length} todos.`);
-    return todos;
-  } catch (err) {
-    throw new Error(`[GmailSync] Error analyzing data with ChatGPT: ${err.message}`);
+  });
+
+  const resolvedMessageDetails = (await Promise.all(messageDetailsPromises)).filter(m => m !== null);
+
+  // After all API calls, if a new token was received, update it.
+  if (newAccessToken) {
+    await updateTokenInDb(newAccessToken);
   }
+
+  return resolvedMessageDetails;
 }
 
-function buildChatGPTPrompt(gmailData) {
-  // Keep data short to avoid token limit
-  // For each message, we might pass snippet, subject, from, date, etc.
-  const snippet = JSON.stringify(gmailData).slice(0, 6000);
-  return `
-  Below is an array of recent Gmail messages in JSON format. Each message has:
-  - 'id' (unique message ID)
-  - 'threadId'
-  - 'snippet' (short excerpt)
-  - 'payload' (full email content, headers, body)
-  - 'source_id' (like 'gmail-<messageId>')
-
-  Your job:
-  1. Identify if there's a clear action or event. (e.g. an interview time, a deadline, a test invite).
-  2. If so, create a JSON array of to-do objects. Each object must have:
-     {
-       "source_id": string (exactly match the message's source_id),
-       "title": string,
-       "description": string,
-       "due_date": string or null (ISO8601 if possible)
-     }
-  3. Only create to-dos if there's a real action. If it's just info or an ad, skip it.
-  4. Return valid JSON only, no extra text.
-
-  Gmail data:
-  ${snippet}
-  `;
-}
-
-// ---------- Process One User's Gmail Data ----------
-
-async function processUserGmailData(user) {
-  const { id: userId, gmail } = user;
-  if (!gmail.accessToken) {
-    throw new Error(`User ${userId} is missing Gmail accessToken.`);
+// ---------- NEW: Store Email in S3 ----------
+async function storeEmailInS3(userId, emailData) {
+  if (!process.env.S3_RAW_BUCKET) {
+    console.error("[GmailSync] S3_RAW_BUCKET environment variable is not set. Cannot store email.");
+    return; // Skip storing this email
   }
-
-  // 1. Fetch Gmail data
-  let rawEmails = await fetchGmailData(userId, gmail);
-  if (rawEmails.length === 0) {
-    console.log(`[GmailSync] User ${userId} has no emails to process.`);
-    return;
-  }
-
-  // 2. Attach stable IDs
-  rawEmails = attachStableIds(rawEmails);
-
-  // 3. Delta check (optional, if you want to store raw data in S3)
-  let deltaEmails = rawEmails;
-  if (process.env.S3_RAW_BUCKET) {
-    deltaEmails = await computeDelta(rawEmails, process.env.S3_RAW_BUCKET, userId);
-
-    // Always store the new aggregated data in S3 for reference
-    await s3.putObject({
-      Bucket: process.env.S3_RAW_BUCKET,
-      Key: `raw-data/gmail/${userId}/latest.json`,
-      Body: JSON.stringify(rawEmails, null, 2),
-      ContentType: "application/json",
-    }).promise();
-  }
-
-  if (deltaEmails.length === 0) {
-    console.log(`[GmailSync] No new Gmail items for user ${userId}; skipping ChatGPT analysis.`);
-    return;
-  }
-
-  // 4. Analyze the delta with ChatGPT
-  const todos = await analyzeWithChatGPT(deltaEmails);
-
-  // 5. Upsert the generated to-dos into the tasks table
-  const client = await pool.connect();
+  const s3Key = `raw_data/gmail/${userId}/${emailData.id}.json`;
   try {
-    await upsertTasks(client, userId, todos);
-  } finally {
-    client.release();
+    await s3.send(new PutObjectCommand({
+      Bucket: process.env.S3_RAW_BUCKET,
+      Key: s3Key,
+      Body: JSON.stringify(emailData, null, 2), // Store the full email object, pretty-printed
+      ContentType: "application/json",
+    }));
+    console.log(`[GmailSync] Stored email ${emailData.id} for user ${userId} at S3 key: ${s3Key}`);
+  } catch (error) {
+    console.error(`[GmailSync] Error storing email ${emailData.id} for user ${userId} in S3:`, error);
+    throw error; // Re-throw to allow processUserGmailData to catch and decide to continue or not
   }
 }
 
-// ---------- Main Handler ----------
+// ---------- REWRITTEN: Process One User's Gmail Data ----------
+async function processUserGmailData(user, dbClient) { // ADDED: dbClient
+  const { id: userId, gmail: gmailCreds } = user;
 
+  if (!gmailCreds || !gmailCreds.accessToken) {
+    console.warn(`[GmailSync] User ${userId} is missing Gmail accessToken or gmailCreds. Skipping.`);
+    return;
+  }
+
+  let rawEmails;
+  try {
+    // Pass dbClient for potential token updates within fetchGmailData
+    rawEmails = await fetchGmailData(userId, gmailCreds, dbClient);
+  } catch (error) {
+    console.error(`[GmailSync] Failed to fetch Gmail data for user ${userId}:`, error.message);
+    return; // Skip this user on critical fetch error
+  }
+
+  if (!rawEmails || rawEmails.length === 0) {
+    console.log(`[GmailSync] User ${userId}: No emails fetched or returned to process.`);
+    return;
+  }
+
+  console.log(`[GmailSync] User ${userId}: Fetched ${rawEmails.length} email(s).`);
+
+  for (const email of rawEmails) {
+    if (!email || !email.id) { // Basic validation of the email object
+        console.warn(`[GmailSync] User ${userId}: Encountered an invalid email object structure, skipping. Email data:`, JSON.stringify(email).substring(0,100));
+        continue;
+    }
+    try {
+      await storeEmailInS3(userId, email);
+    } catch (error) {
+      console.error(`[GmailSync] Failed to process and store email ${email.id} for user ${userId}. Continuing with next email...`);
+    }
+  }
+  console.log(`[GmailSync] Finished S3 storage processing for user ${userId}.`);
+}
+
+// ---------- Main Handler (Modified for new flow and DB client passing) ----------
 exports.handler = async (event, context) => {
   console.log(`[GmailSync] Starting sync at ${new Date().toISOString()}`);
+  let client; // PostgreSQL client
+
   try {
-    const client = await pool.connect();
-    let users = [];
-    try {
-      const res = await client.query(`
-        SELECT id, connected_apps->'gmail' AS gmail
-        FROM users
-        WHERE connected_apps->'gmail' IS NOT NULL
-          AND is_disabled = false
-      `);
-      users = res.rows.map(row => ({
-        id: row.id,
-        gmail: typeof row.gmail === "string" ? JSON.parse(row.gmail) : row.gmail,
-      }));
-    } finally {
-      client.release();
-    }
+    client = await pool.connect();
+
+    const userQueryRes = await client.query(`
+      SELECT id, connected_apps->'gmail' AS gmail
+      FROM users
+      WHERE connected_apps->'gmail' IS NOT NULL
+        AND connected_apps->'gmail'->>'accessToken' IS NOT NULL
+        AND is_disabled = false
+    `);
+    const users = userQueryRes.rows.map(row => ({
+      id: row.id,
+      gmail: typeof row.gmail === "string" ? JSON.parse(row.gmail) : row.gmail,
+    }));
 
     if (users.length === 0) {
-      console.log("[GmailSync] No users with Gmail connected.");
-      return { statusCode: 200, body: "No Gmail users found." };
+      console.log("[GmailSync] No users found with active Gmail connection and access token.");
+      return { statusCode: 200, body: "No Gmail users to sync." };
     }
 
+    console.log(`[GmailSync] Found ${users.length} user(s) to process.`);
+
     for (const user of users) {
+      if (!user.gmail || typeof user.gmail !== 'object') {
+          console.warn(`[GmailSync] User ${user.id} has invalid or missing gmail credentials structure. Skipping.`);
+          continue;
+      }
       try {
-        await processUserGmailData(user);
+        await processUserGmailData(user, client);
         console.log(`[GmailSync] User ${user.id} processed successfully.`);
       } catch (err) {
-        console.error(`[GmailSync] Error processing user ${user.id}: ${err.message}`);
+        console.error(`[GmailSync] Error processing user ${user.id}: ${err.message}`, err.stack);
       }
     }
 
-    return { statusCode: 200, body: "Gmail sync completed." };
+    return { statusCode: 200, body: "Gmail sync completed for all applicable users." };
+
   } catch (err) {
-    console.error("[GmailSync] Global error:", err);
+    console.error("[GmailSync] Global error in handler:", err.message, err.stack);
     return { statusCode: 500, body: "Error in Gmail sync." };
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 };

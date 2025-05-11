@@ -253,7 +253,7 @@ export default function SignupPage() {
                 onClick={handleGoogleSignup}
               >
                 <Mail className="w-5 h-5" />
-                sign up with gmail
+                sign up with google
               </Button>
             </form>
           )}

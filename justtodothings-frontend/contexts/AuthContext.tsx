@@ -3,7 +3,6 @@
 import { createContext, useContext, useState, useEffect, type ReactNode } from "react"
 import { authAPI, refreshToken as refreshAuthTokenAPICall } from "@/services/api"
 import { useRouter } from "next/navigation"
-import { toast } from "sonner"
 // Import the storage utility at the top of the file
 import { storage } from "@/services/storage"
 
@@ -31,68 +30,66 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const initializeAndCheckAuth = async () => {
-      setIsLoading(true); // Ensure loading state is true during initialization
-      let token = storage.getToken();
-      let isTokenCurrentlyValid = false;
+      setIsLoading(true) // Ensure loading state is true during initialization
+      const token = storage.getToken()
+      let isTokenCurrentlyValid = false
 
       if (token && !storage.isTokenExpired(token)) {
-        isTokenCurrentlyValid = true;
+        isTokenCurrentlyValid = true
       }
+
+      // Check for oauth_success in URL to ensure we attempt a refresh
+      const urlParams = new URLSearchParams(window.location.search)
+      const oauthSuccess = urlParams.get("oauth_success")
 
       if (isTokenCurrentlyValid) {
-        console.log('AuthProvider: Valid token found in storage.');
-        setIsAuthenticated(true);
+        console.log("AuthProvider: Valid token found in storage.")
+        setIsAuthenticated(true)
       } else {
         if (token) {
-            console.log('AuthProvider: Token found in storage but is expired. Attempting refresh.');
+          console.log("AuthProvider: Token found in storage but is expired. Attempting refresh.")
+        } else if (oauthSuccess) {
+          console.log("AuthProvider: OAuth success detected. Attempting to get token from refresh cookie.")
         } else {
-            console.log('AuthProvider: No token in storage. Attempting initial refresh via cookie (expected for OAuth redirects or returning users with cookie).');
+          console.log(
+            "AuthProvider: No token in storage. Attempting initial refresh via cookie (expected for OAuth redirects or returning users with cookie).",
+          )
         }
         try {
-          const newAccessToken = await refreshAuthTokenAPICall(); // Call the imported refreshToken
+          const newAccessToken = await refreshAuthTokenAPICall() // Call the imported refreshToken
           if (newAccessToken) {
-            console.log('AuthProvider: Token successfully refreshed/obtained.');
-            
-            // Check for OAuth success parameter
-            const urlParams = new URLSearchParams(window.location.search);
-            if (urlParams.has("oauth_success")) {
-              toast.success("Successfully signed in!");
-              // Clean up the URL
-              const newUrl = window.location.pathname + window.location.hash;
-              window.history.replaceState({}, document.title, newUrl);
-              router.push("/"); // Redirect to dashboard
-            }
-            setIsAuthenticated(true);
+            console.log("AuthProvider: Token successfully refreshed/obtained.")
+            setIsAuthenticated(true)
             // The refreshAuthTokenAPICall already calls storage.setToken()
           } else {
-            console.log('AuthProvider: Attempt to refresh/obtain token did not yield an access token.');
+            console.log("AuthProvider: Attempt to refresh/obtain token did not yield an access token.")
             // No server session, ensure local state reflects this
-            storage.clearToken(); // Ensure no invalid token lingers if refresh failed to produce one
-            setIsAuthenticated(false);
+            storage.clearToken() // Ensure no invalid token lingers if refresh failed to produce one
+            setIsAuthenticated(false)
           }
         } catch (error) {
-          console.error('AuthProvider: Error during token refresh/obtain attempt:', error);
-          storage.clearToken(); // Ensure no invalid token lingers on error
-          setIsAuthenticated(false);
+          console.error("AuthProvider: Error during token refresh/obtain attempt:", error)
+          storage.clearToken() // Ensure no invalid token lingers on error
+          setIsAuthenticated(false)
         }
       }
-      setIsLoading(false); // Set loading to false after all checks and attempts
-    };
+      setIsLoading(false) // Set loading to false after all checks and attempts
+    }
 
-    initializeAndCheckAuth();
+    initializeAndCheckAuth()
 
     // Listen for storage events (for multi-tab support)
     const handleStorageChange = (e: StorageEvent) => {
       if (e.key === "authToken") {
         // Re-check auth status based on the new token state from another tab
-        const currentToken = storage.getToken();
-        setIsAuthenticated(!!currentToken && !storage.isTokenExpired(currentToken ?? ""));
+        const currentToken = storage.getToken()
+        setIsAuthenticated(!!currentToken && !storage.isTokenExpired(currentToken ?? ""))
       }
-    };
+    }
 
-    window.addEventListener("storage", handleStorageChange);
-    return () => window.removeEventListener("storage", handleStorageChange);
-  }, []); // Run once on mount
+    window.addEventListener("storage", handleStorageChange)
+    return () => window.removeEventListener("storage", handleStorageChange)
+  }, []) // Run once on mount
 
   const login = async (email: string, password: string, rememberMe = false) => {
     try {

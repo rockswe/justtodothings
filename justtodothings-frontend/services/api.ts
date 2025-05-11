@@ -35,7 +35,7 @@ export const refreshToken = async (): Promise<string | null> => {
     const response = await axios.post(`${API_URL}/refresh-token`, {}, { withCredentials: true })
 
     if (response.data.accessToken) {
-      storage.setToken(response.data.accessToken, true); 
+      storage.setToken(response.data.accessToken, true)
       return response.data.accessToken
     }
     return null
@@ -43,7 +43,7 @@ export const refreshToken = async (): Promise<string | null> => {
     // Log the error, clear any potentially inconsistent local token, but do not redirect here.
     // Redirection should be handled by components that require auth or by interceptors for protected routes.
     console.error("Initial token refresh via cookie failed (this is expected for new/anonymous users):", error)
-    storage.clearToken() 
+    storage.clearToken()
     return null // Indicate that no session was established
   }
 }
@@ -98,7 +98,7 @@ api.interceptors.response.use(
     const originalRequest = error.config
 
     // If the failed request was to the login endpoint, don't try to refresh token, just reject.
-    if (originalRequest.url === `${API_URL}/login` || originalRequest.url === '/login') {
+    if (originalRequest.url === `${API_URL}/login` || originalRequest.url === "/login") {
       return Promise.reject(error)
     }
 
@@ -298,6 +298,7 @@ export const taskAPI = {
 }
 
 // Settings API
+// Update the UserSettings interface to include GitHub and Slack
 export interface UserSettings {
   theme_preference: "dark" | "light"
   notifications_enabled: boolean
@@ -309,22 +310,41 @@ export interface UserSettings {
     gmail?: {
       email: string
     }
+    github?: {
+      id: string
+      login: string
+    }
+    slack?: {
+      team_id: string
+      user_id: string
+    }
   }
 }
 
 export const settingsAPI = {
   getSettings: async (): Promise<UserSettings> => {
-    const response = await api.get("/settings")
-    return response.data
+    try {
+      const response = await api.get("/settings")
+      return response.data.settings
+    } catch (error) {
+      console.error("Error fetching settings:", error)
+      throw error
+    }
   },
 
-  updateSettings: async (settings: Partial<UserSettings>): Promise<UserSettings> => {
-    const response = await api.patch("/settings", settings)
-    return response.data.settings
+  updateSettings: async (updates: Partial<UserSettings>): Promise<UserSettings> => {
+    try {
+      const response = await api.put("/settings", updates)
+      return response.data.settings
+    } catch (error) {
+      console.error("Error updating settings:", error)
+      throw error
+    }
   },
 }
 
 // Connected Apps API
+// Add new methods to the connectedAppsAPI object
 export const connectedAppsAPI = {
   connectCanvas: async (domain: string, accessToken: string) => {
     const response = await api.post("/connected-apps/canvas", { domain, accessToken })
@@ -338,6 +358,16 @@ export const connectedAppsAPI = {
 
   disconnectGmail: async () => {
     const response = await api.delete("/connected-apps/gmail")
+    return response.data
+  },
+
+  disconnectGitHub: async () => {
+    const response = await api.delete("/connected-apps/github")
+    return response.data
+  },
+
+  disconnectSlack: async () => {
+    const response = await api.delete("/connected-apps/slack")
     return response.data
   },
 }

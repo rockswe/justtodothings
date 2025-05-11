@@ -2,16 +2,17 @@ import type React from "react"
 import { ThemeProvider } from "../contexts/ThemeContext"
 import { AuthProvider } from "../contexts/AuthContext"
 import { TaskProvider } from "../contexts/TaskContext"
-import { Toaster } from "sonner"
+import { Toaster } from "@/components/ui/toaster"
 import "../styles/globals.css"
-import type { Metadata } from 'next'
-import { Inter } from 'next/font/google'
+import type { Metadata } from "next"
+import { Inter } from "next/font/google"
 
-const inter = Inter({ subsets: ['latin'] })
+const inter = Inter({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: 'Just To Do Things',
-  description: 'Manage your tasks efficiently.',
+  title: "justtodothings",
+  description: "Manage your tasks AI-driven.",
+    generator: 'v0.dev'
 }
 
 export default function RootLayout({
@@ -24,12 +25,10 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <ThemeProvider>
-            <TaskProvider>
-              {children}
-              <Toaster richColors />
-            </TaskProvider>
+            <TaskProvider>{children}</TaskProvider>
           </ThemeProvider>
         </AuthProvider>
+        <Toaster />
       </body>
     </html>
   )
