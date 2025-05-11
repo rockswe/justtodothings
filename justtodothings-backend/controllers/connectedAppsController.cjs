@@ -13,7 +13,7 @@ const { parseCookies } = require("../utils/cookieHelper.cjs"); // Used by connec
 
 async function connectCanvas(event) {
     // 1. Ensure user is authenticated
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) {
       return buildResponse(401, { message: "Unauthorized" });
     }
@@ -84,7 +84,7 @@ async function connectCanvas(event) {
 
   // DELETE /connected-apps/canvas Disconnect Canvas integration
 async function disconnectCanvas(event) {
-  const userId = getUserIdFromToken(event);
+  const userId = await getUserIdFromToken(event);
   if (!userId) {
     return buildResponse(401, { message: "Unauthorized" });
   }
@@ -111,8 +111,11 @@ async function disconnectCanvas(event) {
 // --- Gmail --- 
 // New: Redirect handler for initiating Gmail OAuth
 async function connectGmailRedirect(event) {
-    const userId = getUserIdFromToken(event);
-    if (!userId) return buildResponse(401, { message: "Unauthorized" });
+    const userId = await getUserIdFromToken(event);
+    if (!userId) {
+      console.error("[connectGmailRedirect] Unauthorized: User ID not found in token/event.");
+      return buildResponse(401, { message: "Unauthorized" });
+    }
 
     const oauth2Client = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID,
@@ -153,7 +156,7 @@ async function connectGmailRedirect(event) {
 // connectGmail (Callback handler - This function should already exist as per previous steps)
 async function connectGmail(event) {
     // 1. Authenticate user via JWT
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) {
       return buildResponse(401, { message: "Unauthorized" });
     }
@@ -264,7 +267,7 @@ async function connectGmail(event) {
 
 // DELETE /connected-apps/gmail Disconnect Gmail integration
 async function disconnectGmail(event) {
-  const userId = getUserIdFromToken(event);
+  const userId = await getUserIdFromToken(event);
   if (!userId) {
     return buildResponse(401, { message: "Unauthorized" });
   }
@@ -290,8 +293,11 @@ async function disconnectGmail(event) {
 
 // --- GitHub --- 
 async function connectGitHubRedirect(event) { // New redirect handler for GitHub
-    const userId = getUserIdFromToken(event);
-    if (!userId) return buildResponse(401, { message: "Unauthorized" });
+    const userId = await getUserIdFromToken(event);
+    if (!userId) {
+      console.error("[connectGitHubRedirect] Unauthorized: User ID not found in token/event.");
+      return buildResponse(401, { message: "Unauthorized" });
+    }
 
     const state = crypto.randomBytes(16).toString('hex');
     const stateCookie = `oauth_state=${state}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600`;
@@ -312,7 +318,7 @@ async function connectGitHubRedirect(event) { // New redirect handler for GitHub
 }
 
 async function connectGitHub(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
 
     const query = event.queryStringParameters || {};
@@ -375,7 +381,7 @@ async function connectGitHub(event) {
 }
 
 async function disconnectGitHub(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
     const client = await pool.connect();
     try {
@@ -394,8 +400,11 @@ async function disconnectGitHub(event) {
 
 // --- Slack --- 
 async function connectSlackRedirect(event) { // New redirect handler for Slack
-    const userId = getUserIdFromToken(event);
-    if (!userId) return buildResponse(401, { message: "Unauthorized" });
+    const userId = await getUserIdFromToken(event);
+    if (!userId) {
+      console.error("[connectSlackRedirect] Unauthorized: User ID not found in token/event.");
+      return buildResponse(401, { message: "Unauthorized" });
+    }
 
     const state = crypto.randomBytes(16).toString('hex');
     const stateCookie = `oauth_state=${state}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600`;
@@ -424,7 +433,7 @@ async function connectSlackRedirect(event) { // New redirect handler for Slack
 }
 
 async function connectSlack(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
 
     const query = event.queryStringParameters || {};
@@ -510,7 +519,7 @@ async function connectSlack(event) {
 }
 
 async function disconnectSlack(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
     const client = await pool.connect();
     try {

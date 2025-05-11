@@ -7,7 +7,7 @@ const { createTaskSchema, updateTaskSchema } = require("../validation/taskSchema
 
 // POST /tasks
 async function createTask(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
   
     const data = JSON.parse(event.body || "{}");
@@ -36,7 +36,7 @@ async function createTask(event) {
   
   // GET /tasks
   async function listTasks(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
   
     const client = await pool.connect();
@@ -59,7 +59,7 @@ async function createTask(event) {
   
   // DELETE /tasks (bulk delete)
   async function deleteAllTasks(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
   
     const client = await pool.connect();
@@ -77,7 +77,7 @@ async function createTask(event) {
   
   // GET /tasks/{task_id}
   async function getTask(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
   
     const { task_id } = event.pathParameters || {};
@@ -103,7 +103,7 @@ async function createTask(event) {
   
   // PUT /tasks/{task_id}
   async function updateTask(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
   
     const { task_id } = event.pathParameters || {};
@@ -151,7 +151,7 @@ async function createTask(event) {
   
   // DELETE /tasks/{task_id}
   async function deleteTask(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) return buildResponse(401, { message: "Unauthorized" });
   
     const { task_id } = event.pathParameters || {};

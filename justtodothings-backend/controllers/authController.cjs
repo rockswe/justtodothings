@@ -127,7 +127,7 @@ async function refreshToken(event) {
 // POST /delete-account
 async function deleteAccount(event) {
   // 1. Parse user ID from JWT
-  const userId = getUserIdFromToken(event);
+  const userId = await getUserIdFromToken(event);
   if (!userId) {
     return buildResponse(401, { message: "Unauthorized" });
   }

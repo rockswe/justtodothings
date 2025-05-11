@@ -7,7 +7,7 @@ const { getUserIdFromToken } = require("../services/tokenService.cjs");
 // GET /settings
   // Fetches user’s current settings from the users table, including connected apps.
   async function getSettings(event) {
-    const userId = getUserIdFromToken(event);
+    const userId = await getUserIdFromToken(event);
     if (!userId) {
       return buildResponse(401, { message: "Unauthorized" });
     }
@@ -37,7 +37,7 @@ const { getUserIdFromToken } = require("../services/tokenService.cjs");
 // PATCH /settings
 // Updates user’s settings (theme, notifications, and connected_apps)
 async function updateSettings(event) {
-  const userId = getUserIdFromToken(event);
+  const userId = await getUserIdFromToken(event);
   if (!userId) {
     return buildResponse(401, { message: "Unauthorized" });
   }
