@@ -324,21 +324,37 @@ export interface UserSettings {
 export const settingsAPI = {
   getSettings: async (): Promise<UserSettings> => {
     try {
-      const response = await api.get("/settings")
-      return response.data.settings
+      const response = await api.get("/settings");
+      if (response.data && typeof response.data === 'object' && response.data !== null) {
+        if (response.data.connected_apps === null || response.data.connected_apps === undefined) {
+          response.data.connected_apps = {};
+        }
+        return response.data as UserSettings;
+      } else {
+        console.error("Invalid or empty data in API response from /settings:", response.data);
+        throw new Error("Invalid settings data received from server.");
+      }
     } catch (error) {
-      console.error("Error fetching settings:", error)
-      throw error
+      console.error("Error fetching settings from /settings endpoint:", error);
+      throw error;
     }
   },
 
   updateSettings: async (updates: Partial<UserSettings>): Promise<UserSettings> => {
     try {
-      const response = await api.put("/settings", updates)
-      return response.data.settings
+      const response = await api.put("/settings", updates);
+      if (response.data && typeof response.data === 'object' && response.data !== null) {
+        if (response.data.connected_apps === null || response.data.connected_apps === undefined) {
+          response.data.connected_apps = {};
+        }
+        return response.data as UserSettings;
+      } else {
+        console.error("Invalid or empty data in API response from PUT /settings:", response.data);
+        throw new Error("Invalid settings data received from server after update.");
+      }
     } catch (error) {
-      console.error("Error updating settings:", error)
-      throw error
+      console.error("Error updating settings:", error);
+      throw error;
     }
   },
 }

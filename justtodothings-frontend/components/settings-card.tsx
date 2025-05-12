@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
+import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -48,9 +49,40 @@ export function SettingsCard({
   const [isLoading, setIsLoading] = useState(false)
   const [userSettings, setUserSettings] = useState<UserSettings | null>(null)
 
+  const searchParams = useSearchParams()
+  const router = useRouter()
+
+  const fetchSettings = useCallback(async () => {
+    if (!isSignedUp) {
+      return
+    }
+    setIsLoading(true)
+    try {
+      const newSettings = await settingsAPI.getSettings()
+      if (!newSettings) {
+        console.error("[fetchSettings] Fetched settings data is null or undefined. Aborting update.")
+        return
+      }
+      const currentConnectedApps = newSettings.connected_apps || {}
+      setUserSettings({
+        ...newSettings,
+        connected_apps: currentConnectedApps
+      } as UserSettings)
+      if (newSettings.theme_preference) {
+        setTheme(newSettings.theme_preference)
+      }
+      if (typeof newSettings.notifications_enabled === 'boolean') {
+        setNotifications(newSettings.notifications_enabled)
+      }
+    } catch (error) {
+      console.error("Error in fetchSettings execution:", error)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isSignedUp, setTheme, setNotifications, setIsLoading, setUserSettings])
+
   // Load settings on component mount
   useEffect(() => {
-    // If user is signed up, fetch settings from API
     if (isSignedUp) {
       fetchSettings()
     } else {
@@ -63,21 +95,31 @@ export function SettingsCard({
       // For non-signed-up users, default notifications to true
       setNotifications(true)
     }
-  }, [isSignedUp, setTheme])
+  }, [isSignedUp, setTheme, fetchSettings])
 
-  const fetchSettings = async () => {
-    try {
-      setIsLoading(true)
-      const settings = await settingsAPI.getSettings()
-      setUserSettings(settings)
-      setTheme(settings.theme_preference)
-      setNotifications(settings.notifications_enabled)
-    } catch (error) {
-      console.error("Error fetching settings:", error)
-    } finally {
-      setIsLoading(false)
+  // Effect to handle OAuth redirect
+  useEffect(() => {
+    const app = searchParams.get("app")
+    const status = searchParams.get("status")
+    const message = searchParams.get("message")
+
+    if (app && status) {
+      const newSearchParams = new URLSearchParams(searchParams.toString())
+      newSearchParams.delete("app")
+      newSearchParams.delete("status")
+      newSearchParams.delete("message")
+      
+      const newUrl = `${window.location.pathname}?${newSearchParams.toString()}`.replace(/\?$/, '') // Remove trailing '?' if no params left
+      router.replace(newUrl, { scroll: false }) // Clean URL immediately
+
+      if (status === "success" && ["gmail", "github", "slack", "canvas"].includes(app)) {
+        fetchSettings() // Call the memoized fetchSettings
+      } else if (status === "error") {
+        console.error(`OAuth error for ${app}: ${message || 'Unknown error'}`)
+        // Optionally: Display a toast to the user with the error message
+      }
     }
-  }
+  }, [searchParams, router, fetchSettings]) // Dependencies for the OAuth effect
 
   const handleThemeChange = async (value: string) => {
     setTheme(value as "dark" | "light")
@@ -115,13 +157,12 @@ export function SettingsCard({
       return
     }
 
+    // Ensure this uses NEXT_PUBLIC_ for client-side access
     const effectiveApiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.justtodothings.com";
 
     if (isAppConnected(app)) {
-      // Disconnect the app
       handleDisconnectApp(app)
     } else {
-      // Connect the app
       setSelectedApp(app)
       if (app === "canvas") {
         setShowCanvasInstructions(true)
@@ -196,9 +237,9 @@ export function SettingsCard({
 
   // Check if an app is connected based on the backend settings
   const isAppConnected = (app: ConnectedApp): boolean => {
-    if (!isSignedUp) return false
-    if (!userSettings || !userSettings.connected_apps) return false
-
+    if (!isSignedUp || !userSettings || !userSettings.connected_apps) {
+      return false
+    }
     return !!userSettings.connected_apps[app]
   }
 
