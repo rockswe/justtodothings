@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Trash2 } from "lucide-react"
+import { Trash2, X } from "lucide-react"
 import { useTheme } from "../contexts/ThemeContext"
 import type { Task } from "@/services/api"
 
@@ -142,6 +142,15 @@ export function TaskForm({ onSubmit, onClose, onDelete, editTask, priority }: Ta
       <div className="flex justify-between items-center mb-6">
         <h3 className="text-lg break-words max-w-[80%]">{editTask ? "edit task" : "add task"}</h3>
         <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className={`${theme === "dark" ? "text-white hover:bg-white/10" : "text-black hover:bg-black/10"}`}
+            onClick={onClose}
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </Button>
           {editTask && onDelete ? (
             <Button
               variant="ghost"
@@ -154,16 +163,7 @@ export function TaskForm({ onSubmit, onClose, onDelete, editTask, priority }: Ta
             >
               <Trash2 className="w-4 h-4" />
             </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={`${theme === "dark" ? "text-white hover:bg-white/10" : "text-black hover:bg-black/10"}`}
-              onClick={onClose}
-            >
-              <Trash2 className="w-4 h-4" />
-            </Button>
-          )}
+          ) : null}
           <Button
             variant="ghost"
             size="sm"

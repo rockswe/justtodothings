@@ -121,7 +121,6 @@ export default function ContactPage() {
           {submitSuccess ? (
             <div className="text-center space-y-4">
               <p className="text-green-500">Your message has been sent successfully!</p>
-              <p>We'll get back to you as soon as possible.</p>
               <Button variant="outline" className="mt-4" onClick={() => setSubmitSuccess(null)}>
                 send another message
               </Button>

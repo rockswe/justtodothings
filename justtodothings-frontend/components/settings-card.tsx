@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
+import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
@@ -66,12 +67,12 @@ export function SettingsCard({
       const currentConnectedApps = newSettings.connected_apps || {}
       setUserSettings({
         ...newSettings,
-        connected_apps: currentConnectedApps
+        connected_apps: currentConnectedApps,
       } as UserSettings)
       if (newSettings.theme_preference) {
         setTheme(newSettings.theme_preference)
       }
-      if (typeof newSettings.notifications_enabled === 'boolean') {
+      if (typeof newSettings.notifications_enabled === "boolean") {
         setNotifications(newSettings.notifications_enabled)
       }
     } catch (error) {
@@ -108,14 +109,14 @@ export function SettingsCard({
       newSearchParams.delete("app")
       newSearchParams.delete("status")
       newSearchParams.delete("message")
-      
-      const newUrl = `${window.location.pathname}?${newSearchParams.toString()}`.replace(/\?$/, '') // Remove trailing '?' if no params left
+
+      const newUrl = `${window.location.pathname}?${newSearchParams.toString()}`.replace(/\?$/, "") // Remove trailing '?' if no params left
       router.replace(newUrl, { scroll: false }) // Clean URL immediately
 
       if (status === "success" && ["gmail", "github", "slack", "canvas"].includes(app)) {
         fetchSettings() // Call the memoized fetchSettings
       } else if (status === "error") {
-        console.error(`OAuth error for ${app}: ${message || 'Unknown error'}`)
+        console.error(`OAuth error for ${app}: ${message || "Unknown error"}`)
         // Optionally: Display a toast to the user with the error message
       }
     }
@@ -158,7 +159,7 @@ export function SettingsCard({
     }
 
     // Ensure this uses NEXT_PUBLIC_ for client-side access
-    const effectiveApiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.justtodothings.com";
+    const effectiveApiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.justtodothings.com"
 
     if (isAppConnected(app)) {
       handleDisconnectApp(app)
@@ -167,11 +168,11 @@ export function SettingsCard({
       if (app === "canvas") {
         setShowCanvasInstructions(true)
       } else if (app === "gmail") {
-        window.location.href = new URL('/connected-apps/gmail', effectiveApiUrl).href;
+        window.location.href = new URL("/connected-apps/gmail", effectiveApiUrl).href
       } else if (app === "github") {
-        window.location.href = new URL('/connected-apps/github', effectiveApiUrl).href;
+        window.location.href = new URL("/connected-apps/github", effectiveApiUrl).href
       } else if (app === "slack") {
-        window.location.href = new URL('/connected-apps/slack', effectiveApiUrl).href;
+        window.location.href = new URL("/connected-apps/slack", effectiveApiUrl).href
       }
     }
   }
@@ -339,6 +340,21 @@ export function SettingsCard({
 
           {activeCategory === "connectedApps" && (
             <div className="space-y-6">
+              <div
+                className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4 italic border-l-2 pl-3 ${theme === "dark" ? "border-white/20" : "border-black/20"}`}
+              >
+                <p>
+                  Please see our{" "}
+                  <Link
+                    href="/privacy-policy"
+                    className={`underline hover:${theme === "dark" ? "text-white" : "text-black"}`}
+                    onClick={onClose}
+                  >
+                    Privacy Policy
+                  </Link>{" "}
+                  for security concerns
+                </p>
+              </div>
               <div>
                 <h3 className="font-semibold mb-2 flex items-center gap-2">
                   <BookOpen className="h-4 w-4" />

@@ -39,6 +39,8 @@ export default function TodoApp() {
   useEffect(() => {
     const oauthSuccess = searchParams.get("oauth_success")
     const error = searchParams.get("error")
+    const app = searchParams.get("app")
+    const status = searchParams.get("status")
 
     if (oauthSuccess === "true") {
       toast({
@@ -80,6 +82,39 @@ export default function TodoApp() {
       // Remove the error parameter
       const url = new URL(window.location.href)
       url.searchParams.delete("error")
+      router.replace(url.pathname + url.search)
+    } else if (status === "success" && app && ["gmail", "github", "slack", "canvas"].includes(app)) {
+      // Handle successful app connection
+      toast({
+        title: "Connected successfully",
+        description: `Your ${app} account has been connected.`,
+        duration: 5000,
+      })
+
+      // If settings are open, we'll let the SettingsCard handle the refresh
+      // If not, we should trigger a refresh of user settings if they're stored globally
+
+      // Remove the query parameters
+      const url = new URL(window.location.href)
+      url.searchParams.delete("app")
+      url.searchParams.delete("status")
+      router.replace(url.pathname + url.search)
+    } else if (status === "error" && app) {
+      // Handle app connection error
+      const message = searchParams.get("message") || `Failed to connect to ${app}`
+
+      toast({
+        title: "Connection failed",
+        description: message,
+        variant: "destructive",
+        duration: 5000,
+      })
+
+      // Remove the query parameters
+      const url = new URL(window.location.href)
+      url.searchParams.delete("app")
+      url.searchParams.delete("status")
+      url.searchParams.delete("message")
       router.replace(url.pathname + url.search)
     }
   }, [searchParams, toast, router])
