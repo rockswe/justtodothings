@@ -311,7 +311,7 @@ async function connectGmail(event) {
           SET connected_apps = jsonb_set(
               connected_apps,
               '{gmail}',
-              to_jsonb($1::text)::jsonb,
+              $1::jsonb,
               true
             )
           WHERE id = $2
@@ -599,22 +599,27 @@ async function connectSlackRedirect(event) { // New redirect handler for Slack
     const state = crypto.randomBytes(16).toString('hex');
     const stateCookie = `oauth_state=${state}; HttpOnly; Secure; Path=/; SameSite=Lax; Max-Age=600`;
     console.log("[connectSlackRedirect] Generated state for OAuth:", state);
-    const scopes = [
-        // Read scopes (existing)
-        "channels:history", "groups:history", "mpim:history", "im:history",
-        "channels:read", "groups:read", "im:read", "mpim:read",
-        "users:read", "users:read.email",
-
-        // Write scopes (NEW - choose what you need)
-        "chat:write",       // Essential for most bot posting
-        "commands",         // If you plan to use slash commands
-        "im:write"          // If your bot will DM users
-        // Add others as needed: groups:write, mpim:write, chat:write.customize
+    const userScopes = [
+        // Read scopes (essential for sync)
+        "channels:history", 
+        "groups:history", 
+        "mpim:history", 
+        "im:history",
+        "users:read", 
+        "users:read.email",
+        "team:read",
+        "channels:read", // Added for conversations.list (public)
+        "groups:read", // Added for conversations.list (private)
+        // Write/action scopes (re-adding as requested)
+        "chat:write",
+        "im:write",
+        "groups:write", 
+        "mpim:write"  
     ].join(",");
+
     const params = new URLSearchParams({
         client_id: process.env.SLACK_CLIENT_ID,
-        scope: scopes,
-        user_scope: "", // If you need user-specific scopes beyond what bot has, list them here, otherwise can be empty for bot token flow
+        user_scope: userScopes, // Use user_scope for user token scopes
         redirect_uri: process.env.SLACK_REDIRECT_URI,
         state: state,
     });
@@ -700,30 +705,59 @@ async function connectSlack(event) {
 
         console.log("[connectSlack] Slack OAuth response for userId:", userId, JSON.stringify(oauthResponse, null, 2));
 
-        if (!oauthResponse.ok || !oauthResponse.access_token) {
-            console.error("[connectSlack] Slack OAuth failed or access token missing for userId:", userId, "Response:", oauthResponse);
-            const errorRedirectUrl = `${frontendRedirectBaseUrl}?app=slack&status=error&message=SLACK_OAUTH_FAILED_OR_TOKEN_MISSING`;
+        if (!oauthResponse.ok) { // General failure check first
+            console.error("[connectSlack] Slack OAuth overall failed for userId:", userId, "Response:", oauthResponse);
+            const errorRedirectUrl = `${frontendRedirectBaseUrl}?app=slack&status=error&message=SLACK_OAUTH_FAILED`;
             return {
                 statusCode: 302,
                 headers: { ...clearStateCookieHeader, Location: errorRedirectUrl },
                 body: "",
             };
         }
-        console.log("[connectSlack] Slack OAuth successful for userId:", userId, "Access token starts with:", oauthResponse.access_token.substring(0,8) + "...");
 
+        // --- Stricter check for User Token ---
+        if (!oauthResponse.authed_user || !oauthResponse.authed_user.access_token) {
+            console.error("[connectSlack] Slack OAuth error: User token (authed_user.access_token) was NOT found in the response for userId:", userId, "This is required. Full Response:", oauthResponse);
+            // Even if ok=true, if we didn't get the expected user token, it's an error for our flow.
+            const errorRedirectUrl = `${frontendRedirectBaseUrl}?app=slack&status=error&message=SLACK_USER_TOKEN_MISSING_IN_RESPONSE`;
+            return {
+                statusCode: 302,
+                headers: { ...clearStateCookieHeader, Location: errorRedirectUrl },
+                body: "",
+            };
+        }
+        
+        // --- User token path --- 
+        const userAccessToken = oauthResponse.authed_user.access_token; // Definitely the xoxp- token
+        const slackUserId = oauthResponse.authed_user.id;        // Definitely the user's ID
+        const tokenType = 'user';
+        // We can also check the scopes granted specifically to the user token if needed:
+        const grantedUserScopes = oauthResponse.authed_user.scope; // Scopes for the user token
+        console.log(`[connectSlack] Successfully received Slack USER token (xoxp-) for JTD User ID: ${userId}, Slack User ID: ${slackUserId}.`);
+        console.log(`[connectSlack] Granted User Scopes: ${grantedUserScopes}`);
+
+        // Check if essential user scopes (like team:read) were granted
+        if (!grantedUserScopes || !grantedUserScopes.includes('team:read')) {
+             console.error("[connectSlack] Slack OAuth error: Essential scope 'team:read' was NOT granted to the user token for userId:", userId, "Granted scopes:", grantedUserScopes);
+             const errorRedirectUrl = `${frontendRedirectBaseUrl}?app=slack&status=error&message=SLACK_MISSING_REQUIRED_SCOPES`;
+             return {
+                 statusCode: 302,
+                 headers: { ...clearStateCookieHeader, Location: errorRedirectUrl },
+                 body: "",
+             };
+        }
+
+        // Extract other details (team, app_id, potentially bot_user_id if app has one)
         const { 
-            access_token: accessToken,
             team,
             app_id,
-            bot_user_id,
-            authed_user 
-        } = oauthResponse;
+            bot_user_id // Might still be present even if only user token granted
+        } = oauthResponse; 
         
         const team_id = team?.id;
-        // Use authed_user.id if present (user token flow), otherwise bot_user_id (bot token flow)
-        const slack_user_id_for_connection = authed_user?.id || bot_user_id;
-        console.log("[connectSlack] Extracted Slack connection details for userId:", userId, { team_id, app_id, bot_user_id, authed_user_id: authed_user?.id, slack_user_id_for_connection});
+        const slack_user_id_for_connection = slackUserId; 
 
+        console.log("[connectSlack] Extracted Slack connection details for user token flow - userId:", userId, { team_id, app_id, bot_user_id, authed_user_id: slackUserId, slack_user_id_for_connection});
 
         if (!team_id) {
             console.error("[connectSlack] Slack OAuth response missing team ID for userId:", userId, "Response:", oauthResponse);
@@ -757,14 +791,15 @@ async function connectSlack(event) {
             }
 
             const slackData = {
-                accessToken,
+                accessToken: userAccessToken, // Store the USER token (xoxp-)
+                token_type: tokenType,       // Store 'user' as token type
                 team_id: team_id,
                 app_id: app_id,
-                bot_user_id: bot_user_id, // May be null for user tokens
-                user_id: authed_user?.id, // Actual user ID, may be null for bot tokens if authed_user is not present
-                user_id_for_connection: slack_user_id_for_connection // Helper field for duplicate checks
+                user_id: slackUserId,        // This is the authed_user.id
+                bot_user_id: bot_user_id || null, // Store bot_user_id if present, else null
+                user_id_for_connection: slack_user_id_for_connection // This is slackUserId
             };
-            console.log("[connectSlack] Storing Slack connection for userId:", userId, "Data (excluding token):", { team_id, app_id, bot_user_id, user_id: authed_user?.id, slack_user_id_for_connection: slack_user_id_for_connection });
+            console.log("[connectSlack] Storing Slack user token connection for userId:", userId, "Data (excluding token):", { token_type: tokenType, team_id, app_id, user_id: slackUserId, bot_user_id: bot_user_id || null, slack_user_id_for_connection });
 
 
             const updateResult = await client.query(

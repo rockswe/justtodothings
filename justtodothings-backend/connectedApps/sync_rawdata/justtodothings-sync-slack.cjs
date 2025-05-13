@@ -16,6 +16,11 @@ const pool = new Pool({
 
 const S3_RAW_BUCKET_NAME = process.env.S3_RAW_BUCKET;
 
+// --- Caching ---
+// Simple in-memory caches for the duration of a single Lambda execution
+let userInfoCache;
+let channelInfoCache;
+
 // --- Slack API Helper ---
 function getSlackClient(token) {
   return new WebClient(token, {
@@ -23,7 +28,41 @@ function getSlackClient(token) {
   });
 }
 
-// --- S3 Storage Helper ---
+// --- S3 Storage Helpers ---
+
+// Generalized S3 storage function
+async function storeGenericSlackDataInS3(teamId, dataType, dataId, dataObject) {
+  if (!S3_RAW_BUCKET_NAME) {
+    console.error(`[SlackSync:storeGenericSlackDataInS3] S3_RAW_BUCKET not set. Cannot store ${dataType} ${dataId}.`);
+    return;
+  }
+  // Construct a path based on data type. Ensure dataId is filesystem-safe.
+  const safeDataId = String(dataId).replace(/[^a-zA-Z0-9-_.]/g, '_');
+  let s3Key;
+  if (dataType === 'team_info') {
+    s3Key = `raw_data/slack/${teamId}/team_info/${safeDataId}.json`; // e.g., info.json
+  } else if (dataType === 'user') {
+     s3Key = `raw_data/slack/${teamId}/users/${safeDataId}.json`; // e.g., U012345.json
+  } else if (dataType === 'channel_info') {
+     s3Key = `raw_data/slack/${teamId}/channels/${safeDataId}_info.json`; // e.g., C0ABCDEFG_info.json
+  } else {
+     console.warn(`[SlackSync:storeGenericSlackDataInS3] Unknown dataType: ${dataType}. Cannot determine S3 path.`);
+     return; // Or define a default path / error handling
+  }
+
+  try {
+    await s3.send(new PutObjectCommand({
+      Bucket: S3_RAW_BUCKET_NAME,
+      Key: s3Key,
+      Body: JSON.stringify(dataObject, null, 2),
+      ContentType: "application/json",
+    }));
+    console.log(`[SlackSync:storeGenericSlackDataInS3] SUCCESS storing ${dataType} ${safeDataId} for team ${teamId} to S3 key: ${s3Key}`);
+  } catch (error) {
+    console.error(`[SlackSync:storeGenericSlackDataInS3] S3 PUT FAILED for ${dataType} ${safeDataId}, team ${teamId}, key ${s3Key}:`, error);
+  }
+}
+
 async function storeMessageInS3(teamId, channelId, message, parentMessageTs = null) {
   if (!S3_RAW_BUCKET_NAME) {
     console.error("[SlackSync] S3_RAW_BUCKET environment variable is not set. Cannot store message.");
@@ -50,6 +89,102 @@ async function storeMessageInS3(teamId, channelId, message, parentMessageTs = nu
     console.error(`[SlackSync] Error storing message ${message.ts} for team ${teamId}, channel ${channelId} in S3:`, error);
   }
 }
+
+// --- Context Fetching Helpers ---
+
+async function fetchAndStoreTeamInfo(slackClient, teamId) {
+    // Fetches team info once per run. Requires team:read scope.
+    try {
+        console.log(`[SlackSync] Fetching team info for Team ID: ${teamId}`);
+        const teamInfoRes = await slackClient.team.info();
+        if (teamInfoRes.ok && teamInfoRes.team) {
+            await storeGenericSlackDataInS3(teamId, 'team_info', 'info', teamInfoRes.team);
+        } else {
+            console.warn(`[SlackSync] Failed to fetch team info for Team ID: ${teamId}`, teamInfoRes.error);
+        }
+    } catch (error) {
+        console.error(`[SlackSync] Error calling team.info for Team ID ${teamId}: ${error.message}`);
+    }
+}
+
+
+async function fetchAndCacheUserInfo(slackClient, slackUserId, teamId) {
+    // Fetches user info if not in cache, stores in S3. Requires users:read scope.
+    if (!slackUserId) {
+        // console.warn('[SlackSync:fetchAndCacheUserInfo] No Slack User ID provided.'); // May be noisy for bot messages etc.
+        return null; 
+    }
+    if (userInfoCache.has(slackUserId)) {
+        // console.log(`[SlackSync:fetchAndCacheUserInfo] Cache HIT for user ${slackUserId}`);
+        return userInfoCache.get(slackUserId);
+    }
+    console.log(`[SlackSync:fetchAndCacheUserInfo] Cache MISS for user ${slackUserId}. Fetching...`);
+    try {
+        const userInfoRes = await slackClient.users.info({ user: slackUserId });
+        if (userInfoRes.ok && userInfoRes.user) {
+            const userData = userInfoRes.user;
+            userInfoCache.set(slackUserId, userData); // Add to cache
+            await storeGenericSlackDataInS3(teamId, 'user', slackUserId, userData);
+            return userData;
+        } else {
+            console.warn(`[SlackSync:fetchAndCacheUserInfo] Failed to fetch info for user ${slackUserId}:`, userInfoRes.error);
+            userInfoCache.set(slackUserId, null); // Cache null to prevent retries for this user in this run
+            return null;
+        }
+    } catch (error) {
+        console.error(`[SlackSync:fetchAndCacheUserInfo] Error calling users.info for ${slackUserId}: ${error.message}`);
+        userInfoCache.set(slackUserId, null); // Cache null on error
+        return null;
+    }
+}
+
+async function fetchAndCacheChannelInfo(slackClient, channelId, teamId, isImOrMpim) {
+    // Fetches channel info if not in cache, stores in S3. Requires appropriate read scopes (channels:read etc.).
+    // Skip for IMs/MPIMs as conversations.info doesn't apply well or might lack useful metadata like topic/purpose.
+    if (isImOrMpim) {
+        // console.log(`[SlackSync:fetchAndCacheChannelInfo] Skipping info fetch for IM/MPIM channel ${channelId}`);
+        return null;
+    }
+     if (channelInfoCache.has(channelId)) {
+        // console.log(`[SlackSync:fetchAndCacheChannelInfo] Cache HIT for channel ${channelId}`);
+        return channelInfoCache.get(channelId);
+    }
+    console.log(`[SlackSync:fetchAndCacheChannelInfo] Cache MISS for channel ${channelId}. Fetching...`);
+    try {
+        const channelInfoRes = await slackClient.conversations.info({ channel: channelId });
+        if (channelInfoRes.ok && channelInfoRes.channel) {
+            const channelData = channelInfoRes.channel;
+            // Store relevant subset or full data? Let's store a useful subset for now.
+            const infoToStore = {
+                id: channelData.id,
+                name: channelData.name,
+                created: channelData.created,
+                creator: channelData.creator,
+                is_archived: channelData.is_archived,
+                is_general: channelData.is_general,
+                is_private: channelData.is_private,
+                is_im: channelData.is_im,
+                is_mpim: channelData.is_mpim,
+                topic: channelData.topic?.value,
+                purpose: channelData.purpose?.value,
+                num_members: channelData.num_members, // Note: May not be present on all channel types or for user tokens without certain permissions.
+                // last_read: channelData.last_read, // Could be useful for user tokens
+            };
+            channelInfoCache.set(channelId, infoToStore); // Add to cache
+            await storeGenericSlackDataInS3(teamId, 'channel_info', channelId, infoToStore);
+            return infoToStore;
+        } else {
+            console.warn(`[SlackSync:fetchAndCacheChannelInfo] Failed to fetch info for channel ${channelId}:`, channelInfoRes.error);
+            channelInfoCache.set(channelId, null); // Cache null to prevent retries
+            return null;
+        }
+    } catch (error) {
+        console.error(`[SlackSync:fetchAndCacheChannelInfo] Error calling conversations.info for ${channelId}: ${error.message}`);
+        channelInfoCache.set(channelId, null); // Cache null on error
+        return null;
+    }
+}
+
 
 // --- Database Helper for Timestamps ---
 async function updateLastProcessedTsInDB(dbClient, userId, channelId, newTs, currentSlackDataFromDB) {
@@ -84,6 +219,10 @@ async function fetchAndStoreThreadReplies(slackClient, teamId, channelId, thread
           // replies are chronological (oldest first). Parent message (threadTs) is typically the first message in the array.
           if (reply.ts !== threadTs) { // Only store actual replies, not the parent message itself again.
              await storeMessageInS3(teamId, channelId, reply, threadTs);
+             // Fetch/cache user info for the reply author
+             if (reply.user) { // reply.user might be missing for some message types
+                await fetchAndCacheUserInfo(slackClient, reply.user, teamId);
+             }
           }
         }
       }
@@ -94,13 +233,16 @@ async function fetchAndStoreThreadReplies(slackClient, teamId, channelId, thread
   }
 }
 
-async function fetchAndStoreMessagesInConversation(slackClient, dbClient, userId, teamId, conversation, slackDataFromDB) {
+async function fetchAndStoreMessagesInConversation(slackClient, dbClient, userId, teamId, conversation, slackDataFromDB, isImOrMpim) {
   const channelId = conversation.id;
   const lastProcessedTs = slackDataFromDB.last_processed_ts_per_channel?.[channelId];
-  let newestTsInThisRun = null; // Will hold the TS of the newest message processed in this specific run
+  let newestTsInThisRun = null;
   let messagesProcessedCount = 0;
 
   console.log(`[SlackSync] User ${userId}, Channel ${channelId} (${conversation.name || 'N/A'}): Starting sync. Last TS: ${lastProcessedTs || 'None'}.`);
+  
+  // Fetch/cache channel info at the start of processing this conversation
+  await fetchAndCacheChannelInfo(slackClient, channelId, teamId, isImOrMpim);
 
   try {
     for await (const page of slackClient.paginate("conversations.history", {
@@ -122,7 +264,13 @@ async function fetchAndStoreMessagesInConversation(slackClient, dbClient, userId
           await storeMessageInS3(teamId, channelId, message);
           messagesProcessedCount++;
 
+          // Fetch/cache user info for the message author
+          if (message.user) { // message.user might be missing for some message types (e.g., channel join)
+              await fetchAndCacheUserInfo(slackClient, message.user, teamId);
+          }
+
           if (message.thread_ts && message.reply_count && message.ts === message.thread_ts) {
+            // Pass caches down to thread fetching
             await fetchAndStoreThreadReplies(slackClient, teamId, channelId, message.thread_ts);
           }
         }
@@ -153,35 +301,51 @@ async function processUserSlackData(user, dbClient) {
     console.warn(`[SlackSync] User ${userId} is missing Slack accessToken. Skipping.`);
     return;
   }
-  // CRITICAL: team_id is essential for S3 path uniqueness if the bot/app is in multiple workspaces.
-  // It should be fetched during OAuth and stored alongside the accessToken.
   const teamId = slackDataFromDB.team_id;
   if (!teamId) {
       console.error(`[SlackSync] User ${userId}: team_id is MISSING from Slack credentials. S3 paths will be incorrect. Skipping user.`);
-      // TODO: Consider marking this user's Slack connection as needing re-authentication to fetch team_id.
       return;
   }
   const token = slackDataFromDB.accessToken;
   const slackClient = getSlackClient(token);
 
+  // --- DEBUG: Check token scopes ---
+  try {
+    const authTestRes = await slackClient.auth.test();
+    console.log(`[SlackSync] DEBUG User ${userId}, Team ${teamId}: auth.test successful. User: ${authTestRes.user_id}, Team: ${authTestRes.team_id}. Scopes from header: ${authTestRes.response_metadata?.scopes?.join(',')}`);
+    // Note: The primary scope info is often in the response headers, accessed via response_metadata by the SDK
+  } catch (authErr) {
+    console.error(`[SlackSync] DEBUG User ${userId}, Team ${teamId}: auth.test FAILED: ${authErr.message}`);
+  }
+  // --- END DEBUG ---
+
+  // Initialize caches for this user's run
+  userInfoCache = new Map();
+  channelInfoCache = new Map();
+
   console.log(`[SlackSync] User ${userId}, Team ${teamId}: Starting Slack sync.`);
+  
+  // Fetch and store team info once
+  await fetchAndStoreTeamInfo(slackClient, teamId); // Requires team:read scope
 
   try {
     for await (const page of slackClient.paginate("conversations.list", {
-        types: "public_channel,private_channel,mpim,im",
         limit: 200, 
         exclude_archived: true,
     })) {
       if (page.channels && page.channels.length > 0) {
         for (const conversation of page.channels) {
-           // For bot tokens, is_member is usually true for channels it's in. IMs don't have is_member.
-           // For user tokens, is_member=true means user is part of the channel.
-           // This simple check is generally okay; if a channel is listed, the token should have some access.
-           // If specific logic for user tokens vs bot tokens is needed for channel access, refine here.
-           // Example: if (slackDataFromDB.token_type === 'user' && conversation.is_member === false && !conversation.is_im) continue;
-          await fetchAndStoreMessagesInConversation(slackClient, dbClient, userId, teamId, conversation, slackDataFromDB);
-        }
-      }
+           // Skip public/private channels the bot/user isn't a member of.
+           // Also skip MPIMs if is_member is false (though usually not applicable for MPIMs listed for a user token)
+           const isImOrMpim = conversation.is_im || conversation.is_mpim;
+           if (conversation.is_member === false && !isImOrMpim) {
+               console.log(`[SlackSync] User ${userId}, Team ${teamId}: Skipping channel ${conversation.id} (${conversation.name || 'N/A'}) because bot/user is not a member.`);
+               continue;
+           }
+           // Pass caches down
+           await fetchAndStoreMessagesInConversation(slackClient, dbClient, userId, teamId, conversation, slackDataFromDB, isImOrMpim);
+         }
+       }
       if (!page.response_metadata?.next_cursor) break;
     }
     console.log(`[SlackSync] User ${userId}, Team ${teamId}: Finished processing all conversations.`);
@@ -197,7 +361,7 @@ async function processUserSlackData(user, dbClient) {
 exports.handler = async (event, context) => {
   console.log(`[SlackSync] Starting Slack sync at ${new Date().toISOString()}`);
   if (!S3_RAW_BUCKET_NAME) {
-    console.error("[SlackSync] Critical: S3_RAW_BUCKET environment variable not set. Aborting.");
+    console.error("[SlackSync] Critical: S3_RAW_BUCKET environment variable is not set. Aborting.");
     return { statusCode: 500, body: "S3_RAW_BUCKET not configured." };
   }
   let dbClient;
