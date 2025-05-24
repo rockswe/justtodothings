@@ -239,6 +239,7 @@ export const authAPI = {
 }
 
 // Task API
+// Update the Task interface to include generated_draft and source_metadata
 export interface Task {
   id: number
   title: string
@@ -249,6 +250,14 @@ export interface Task {
   created_at: string
   updated_at: string
   is_completed?: boolean
+  generated_draft?: string | null
+  source_metadata?: {
+    integration_type?: string
+    action_type_hint?: string
+    original_s3_key_user_id?: string
+    s3_key_processed?: string
+    [key: string]: any
+  }
 }
 
 export interface CreateTaskPayload {
@@ -267,6 +276,7 @@ export interface UpdateTaskPayload {
   is_completed?: boolean
 }
 
+// Add new methods to the taskAPI object
 export const taskAPI = {
   getTasks: async (): Promise<Task[]> => {
     try {
@@ -294,6 +304,21 @@ export const taskAPI = {
 
   deleteAllTasks: async (): Promise<void> => {
     await api.delete("/tasks")
+  },
+
+  generateInitialDraft: async (taskId: number): Promise<Task> => {
+    const response = await api.post(`/tasks/${taskId}/draft-email`)
+    return response.data.task
+  },
+
+  rewriteEmailDraft: async (taskId: number, instructions: string): Promise<Task> => {
+    const response = await api.post(`/tasks/${taskId}/email/draft/rewrite`, { rewrite_instructions: instructions })
+    return response.data.task
+  },
+
+  sendEmailReply: async (taskId: number, emailBody: string): Promise<{ message: string; taskId: string }> => {
+    const response = await api.post(`/tasks/${taskId}/email/send`, { final_email_body: emailBody })
+    return response.data
   },
 }
 
@@ -324,37 +349,37 @@ export interface UserSettings {
 export const settingsAPI = {
   getSettings: async (): Promise<UserSettings> => {
     try {
-      const response = await api.get("/settings");
-      if (response.data && typeof response.data === 'object' && response.data !== null) {
+      const response = await api.get("/settings")
+      if (response.data && typeof response.data === "object" && response.data !== null) {
         if (response.data.connected_apps === null || response.data.connected_apps === undefined) {
-          response.data.connected_apps = {};
+          response.data.connected_apps = {}
         }
-        return response.data as UserSettings;
+        return response.data as UserSettings
       } else {
-        console.error("Invalid or empty data in API response from /settings:", response.data);
-        throw new Error("Invalid settings data received from server.");
+        console.error("Invalid or empty data in API response from /settings:", response.data)
+        throw new Error("Invalid settings data received from server.")
       }
     } catch (error) {
-      console.error("Error fetching settings from /settings endpoint:", error);
-      throw error;
+      console.error("Error fetching settings from /settings endpoint:", error)
+      throw error
     }
   },
 
   updateSettings: async (updates: Partial<UserSettings>): Promise<UserSettings> => {
     try {
-      const response = await api.put("/settings", updates);
-      if (response.data && typeof response.data === 'object' && response.data !== null) {
+      const response = await api.put("/settings", updates)
+      if (response.data && typeof response.data === "object" && response.data !== null) {
         if (response.data.connected_apps === null || response.data.connected_apps === undefined) {
-          response.data.connected_apps = {};
+          response.data.connected_apps = {}
         }
-        return response.data as UserSettings;
+        return response.data as UserSettings
       } else {
-        console.error("Invalid or empty data in API response from PUT /settings:", response.data);
-        throw new Error("Invalid settings data received from server after update.");
+        console.error("Invalid or empty data in API response from PUT /settings:", response.data)
+        throw new Error("Invalid settings data received from server after update.")
       }
     } catch (error) {
-      console.error("Error updating settings:", error);
-      throw error;
+      console.error("Error updating settings:", error)
+      throw error
     }
   },
 }

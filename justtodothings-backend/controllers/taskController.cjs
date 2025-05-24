@@ -21,7 +21,7 @@ async function createTask(event) {
       const query = `
         INSERT INTO tasks (user_id, title, description, priority, due_date, is_completed)
         VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, title, description, priority, due_date, is_completed, created_at, updated_at
+        RETURNING id, title, description, priority, due_date, is_completed, created_at, updated_at, source_metadata
       `;
       const values = [userId, title, description || null, priority, due_date || null, is_completed || false];
       const result = await client.query(query, values);
@@ -42,7 +42,7 @@ async function createTask(event) {
     const client = await pool.connect();
     try {
       const query = `
-        SELECT id, title, description, priority, todo_order, due_date, is_completed, created_at, updated_at
+        SELECT id, title, description, priority, todo_order, due_date, is_completed, created_at, updated_at, source_metadata
         FROM tasks
         WHERE user_id = $1
         ORDER BY created_at DESC
@@ -86,7 +86,7 @@ async function createTask(event) {
     const client = await pool.connect();
     try {
       const query = `
-        SELECT id, title, description, priority, todo_order, due_date, is_completed, created_at, updated_at
+        SELECT id, title, description, priority, todo_order, due_date, is_completed, created_at, updated_at, source_metadata
         FROM tasks
         WHERE id = $1 AND user_id = $2
       `;
@@ -127,7 +127,7 @@ async function createTask(event) {
         is_completed = COALESCE($5, is_completed),
         updated_at = now()
       WHERE id = $6 AND user_id = $7
-      RETURNING id, title, description, priority, todo_order, due_date, is_completed, created_at, updated_at
+      RETURNING id, title, description, priority, todo_order, due_date, is_completed, created_at, updated_at, source_metadata
     `;    
       const values = [
         title, 

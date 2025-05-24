@@ -3,6 +3,7 @@
 const { S3Client, GetObjectCommand } = require("@aws-sdk/client-s3");
 const { Pool } = require("pg");
 const axios = require("axios"); // Or Google AI SDK for Gemini
+const { LambdaClient, InvokeCommand } = require("@aws-sdk/client-lambda");
 
 const s3 = new S3Client({});
 const pool = new Pool({
@@ -15,9 +16,19 @@ const pool = new Pool({
 });
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_MODEL_NAME = "gemini-2.5-pro-preview-03-25"; // Force specific model
+const DRAFT_EMAIL_LAMBDA_FUNCTION_NAME = process.env.DRAFT_EMAIL_LAMBDA_FUNCTION_NAME; // Env var for draft lambda
+
+// Helper to extract email address from a header string
+function extractEmailAddress(emailHeaderValue) {
+    if (!emailHeaderValue) return null;
+    // Matches an email address enclosed in < >
+    const match = emailHeaderValue.match(/<([^>]+)>/);
+    // If found, return the captured group (the email), otherwise return the trimmed original value (might be just an email)
+    return match ? match[1] : emailHeaderValue.trim();
+}
 
 // Helper to call Gemini API
-async function callGeminiForAnalysis(s3ObjectContentString, integrationType, s3Key) {
+async function callGeminiForAnalysis(s3ObjectContentString, integrationType, s3Key, userPrimaryEmailForContext = null) {
     let contextSnippet = "";
     let defaultCanvasItemName = null;
     const MAX_DESC_LENGTH = 4000; // Max characters of description to pass to Gemini
@@ -85,35 +96,48 @@ async function callGeminiForAnalysis(s3ObjectContentString, integrationType, s3K
     // Get current date for relative date calculations by Gemini
     const currentDateForPrompt = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
 
+    let userContextIntro = "";
+    if (integrationType === "gmail" && userPrimaryEmailForContext) {
+        userContextIntro = `
+        This email is being analyzed for the user whose email address is '${userPrimaryEmailForContext}'. Let's call this user "User Prime".
+        The "From" field in the Data Snippet indicates the sender of the email.
+        Your goal is to identify if "User Prime" needs to take an action based on this email.
+        If the email is from someone else TO "User Prime", the task should be about what "User Prime" needs to do in relation to that sender or the email's content.
+        For example, if 'sender@example.com' asks 'User Prime' to 'review document A', the item_name should be something like 'Review document A from sender@example.com' or 'Follow up with sender@example.com about document A'.
+        Avoid creating tasks that imply "User Prime" is asking themselves to do something unless the context is explicitly a self-note or reminder sent to oneself (e.g. an email from 'User Prime' to 'User Prime').
+        `;
+    }
+
     // 2. Construct the Prompt
     const prompt = `
         You are an AI assistant tasked with identifying actionable items from various data sources for a to-do list.
         The current date is ${currentDateForPrompt}. Please use this as the reference for any relative date calculations (e.g., if "tomorrow" is mentioned, it means the day after ${currentDateForPrompt}).
+        ${userContextIntro}
         Analyze the following data item from the '${integrationType}' integration:
         --- DATA SNIPPET ---
         ${contextSnippet}
         --- END DATA SNIPPET ---
 
         Based ONLY on the snippet provided:
-        1. Is this item something that requires the user to take a direct action or create a to-do? (e.g., reply to an email, complete an assignment, review a PR, respond to a message asking for something).
+        1. Is this item something that requires the user ("User Prime" if defined above, otherwise the recipient of the data item) to take a direct action or create a to-do? (e.g., reply to an email, complete an assignment, review a PR, respond to a message asking for something).
         2. If yes, provide:
             - A concise 'item_name' (max 10 words, representing the specific name of the item, e.g., "Chapter 1 Homework", "Midterm Reminder", "Review Project Proposal"). For Canvas items, this should be just the assignment/announcement name itself, without course details.
-            - A brief 'summary' (1-2 sentences for the task description).
+            - A brief 'summary' (1-2 sentences for the task description). The summary should focus on the core action to be taken or the main information from the item. Avoid including phrases like "This email is from..." or mentioning the sender directly in the summary.
             - A suggested 'priority' ('low', 'medium', 'important').
             - An extracted 'due_date'. If a date (e.g., "May 15th", "tomorrow") and/or time (e.g., "8 PM", "noon") is mentioned, convert it to a full ISO 8601 format (YYYY-MM-DDTHH:mm:ssZ) using ${currentDateForPrompt} as the reference for "today". If only a date is mentioned, assume end of day. If no specific due date is found, return null.
-            - An 'action_type_hint' (e.g., 'email_reply_needed', 'code_review_request', 'assignment_due', 'slack_question_to_answer', 'general_task').
+            - An 'action_type_hint'. If the data item is an email that seems to ask a question of the user, or implies a response is expected (not just a notification or FYI), use 'email_reply_needed'. Other examples: 'code_review_request', 'assignment_due', 'slack_question_to_answer', 'general_task' for informational items or items not fitting other categories.
 
         Respond ONLY with a valid JSON object.
         If actionable, the JSON should be:
         {
             "is_actionable": true,
-            "item_name": "Example Item Name",
+            "item_name": "Example: Follow up with sender@example.com about Report",
             "summary": "Example summary of what needs to be done.",
             "priority": "medium",
             "due_date": "2024-09-15T23:59:00Z",
             "action_type_hint": "example_hint"
         }
-        If NOT actionable (e.g., informational, an ad, already completed, a simple notification), respond with:
+        If NOT actionable (e.g., informational, an ad, already completed, a simple notification, or an email sent BY "User Prime" to others that is not a self-reminder), respond with:
         {
             "is_actionable": false
         }
@@ -246,6 +270,66 @@ exports.handler = async (event) => {
             console.log(`[InitialAnalysis] Slack data for team ${teamIdFromKey}. Will assign task to app user ${actualUserIdForTask}.`);
         }
 
+        // If it's a Gmail item, check if it was sent by the user themselves
+        if (integrationType === 'gmail' && actualUserIdForTask) {
+            const senderHeader = jsonDataForTaskCreation.from; // e.g., "John Doe <john.doe@example.com>" or "john.doe@example.com"
+            const senderEmail = extractEmailAddress(senderHeader);
+
+            if (senderEmail) {
+                let dbClientForUserEmailCheck; // Declare client variable outside try
+                try {
+                    dbClientForUserEmailCheck = await pool.connect();
+                    const userGmailQuery = await dbClientForUserEmailCheck.query(
+                        "SELECT connected_apps->'gmail'->>'email' AS gmail_address FROM users WHERE id = $1",
+                        [actualUserIdForTask]
+                    );
+                    if (userGmailQuery.rows.length > 0 && userGmailQuery.rows[0].gmail_address) {
+                        const userConnectedGmailAddress = userGmailQuery.rows[0].gmail_address;
+                        if (senderEmail.toLowerCase() === userConnectedGmailAddress.toLowerCase()) {
+                            console.log(`[InitialAnalysis] Skipping email sent by the user themselves (user ID: ${actualUserIdForTask}, sender: ${senderEmail}) for S3 key ${s3Key}.`);
+                            continue; // Skip to the next S3 record
+                        }
+                    } else {
+                        console.warn(`[InitialAnalysis] Could not retrieve connected Gmail address for user ${actualUserIdForTask} to check if email is outgoing. Proceeding with analysis for ${s3Key}.`);
+                    }
+                } catch (userEmailError) {
+                    console.error(`[InitialAnalysis] DB error fetching user's Gmail address for user ${actualUserIdForTask} (S3 key ${s3Key}):`, userEmailError.message);
+                    // Fallback: Proceed with analysis if we can't confirm it's an outgoing email
+                } finally {
+                    if (dbClientForUserEmailCheck) {
+                        dbClientForUserEmailCheck.release();
+                    }
+                }
+            } else {
+                console.warn(`[InitialAnalysis] Could not extract sender email from 'from' header: "${senderHeader}" for S3 key ${s3Key}. Proceeding with analysis.`);
+            }
+        }
+
+        // Fetch user's primary Gmail address for context if it's a Gmail item
+        let userAppGmailAddressForContext = null;
+        if (integrationType === 'gmail' && actualUserIdForTask) {
+            let dbClientUserEmail; // Declare client variable outside try
+            try {
+                dbClientUserEmail = await pool.connect();
+                const userRes = await dbClientUserEmail.query(
+                    "SELECT connected_apps->'gmail'->>'email' as gmail_address FROM users WHERE id = $1",
+                    [actualUserIdForTask]
+                );
+                if (userRes.rows.length > 0 && userRes.rows[0].gmail_address) {
+                    userAppGmailAddressForContext = userRes.rows[0].gmail_address;
+                    console.log(`[InitialAnalysis] Identified user's Gmail address as ${userAppGmailAddressForContext} for task analysis context for S3 key ${s3Key}.`);
+                } else {
+                    console.warn(`[InitialAnalysis] Could not fetch user's connected Gmail address for user ID ${actualUserIdForTask} (S3 key ${s3Key}). Prompt context might be less specific.`);
+                }
+            } catch (err) {
+                console.error(`[InitialAnalysis] DB error fetching user's Gmail address for ${actualUserIdForTask} (S3 key ${s3Key}): ${err.message}`);
+            } finally {
+                if (dbClientUserEmail) {
+                    dbClientUserEmail.release();
+                }
+            }
+        }
+
         // Determine canonicalTaskSourceId
         let canonicalTaskSourceId;
         if (integrationType === "canvas") {
@@ -276,7 +360,7 @@ exports.handler = async (event) => {
 
 
         console.log(`[InitialAnalysis] Analyzing ${integrationType} data for user/entity ${actualUserIdForTask} (canonical source ID: ${canonicalTaskSourceId}) from ${s3Key} with Gemini.`);
-        const analysisResult = await callGeminiForAnalysis(s3ObjectContentString, integrationType, s3Key);
+        const analysisResult = await callGeminiForAnalysis(s3ObjectContentString, integrationType, s3Key, userAppGmailAddressForContext);
 
         console.log(`[InitialAnalysis] Gemini analysis result for ${s3Key}:`, JSON.stringify(analysisResult));
 
@@ -377,6 +461,15 @@ exports.handler = async (event) => {
                     s3_key_processed: s3Key // Add the S3 key of the object that was processed
                 };
 
+                // If it's a Gmail item and we have the sender's email, add it to metadata
+                if (integrationType === 'gmail' && jsonDataForTaskCreation?.from) {
+                    const senderHeaderForMeta = jsonDataForTaskCreation.from;
+                    const extractedSenderEmailForMeta = extractEmailAddress(senderHeaderForMeta);
+                    if (extractedSenderEmailForMeta) {
+                        sourceMetadata.sender_email = extractedSenderEmailForMeta;
+                    }
+                }
+
                 const validPriorities = ['low', 'medium', 'important'];
                 const taskPriority = validPriorities.includes(String(priority)?.toLowerCase()) ? String(priority).toLowerCase() : 'medium';
                 
@@ -389,6 +482,8 @@ exports.handler = async (event) => {
                     console.log(`  Source Metadata: ${JSON.stringify(sourceMetadata)}`);
                 }
 
+                // Add this new log statement to inspect sourceMetadata before DB operation
+                console.log("[InitialAnalysis] Source metadata being prepared for DB:", JSON.stringify(sourceMetadata));
 
                 const upsertQuery = `
                     INSERT INTO tasks (user_id, title, description, priority, due_date, source_id, source_metadata)
@@ -415,22 +510,43 @@ exports.handler = async (event) => {
                 const res = await dbClient.query(upsertQuery, values);
                 const wasInserted = res.rows[0].inserted;
                 const actionTaken = wasInserted ? "created" : "updated";
-                console.log(`[InitialAnalysis] Successfully ${actionTaken} task ID ${res.rows[0].id} for user ${actualUserIdForTask} from S3 object ${s3Key} (canonical source ID: ${canonicalTaskSourceId}).`);
+                const taskId = res.rows[0].id;
+                console.log(`[InitialAnalysis] Successfully ${actionTaken} task ID ${taskId} for user ${actualUserIdForTask} from S3 object ${s3Key} (canonical source ID: ${canonicalTaskSourceId}).`);
+
+                // If a new task was created (or updated) for an email that needs a reply, trigger draft generation
+                if (taskId && integrationType === 'gmail' && analysisResult.action_type_hint === 'email_reply_needed') {
+                    if (DRAFT_EMAIL_LAMBDA_FUNCTION_NAME) {
+                        const lambda = new LambdaClient({});
+                        const invokeParams = {
+                            FunctionName: DRAFT_EMAIL_LAMBDA_FUNCTION_NAME,
+                            InvocationType: 'Event', // Asynchronous invocation
+                            Payload: JSON.stringify({ taskId: taskId })
+                        };
+                        try {
+                            await lambda.send(new InvokeCommand(invokeParams));
+                            console.log(`[InitialAnalysis] Successfully triggered draft generation for task ID ${taskId}`);
+                        } catch (invokeError) {
+                            console.error(`[InitialAnalysis] Error triggering draft generation for task ID ${taskId}:`, invokeError);
+                            // Optional: Add to a Dead Letter Queue (DLQ) or custom logging for retry if critical
+                        }
+                    } else {
+                        console.warn(`[InitialAnalysis] DRAFT_EMAIL_LAMBDA_FUNCTION_NAME environment variable not set. Skipping draft generation for task ${taskId}.`);
+                    }
+                }
 
             } catch (dbError) {
                 console.error(`[InitialAnalysis] DB Error ${dbError.message.includes('violates unique constraint "tasks_unique_source_id"') ? 'upserting (unique constraint hit before ON CONFLICT handling or other issue)' : 'upserting'} task for S3 object ${s3Key}, user ${actualUserIdForTask}, canonical source_id ${canonicalTaskSourceId}:`, dbError);
-                console.error(`[InitialAnalysis] Failed Task Data: user_id='${actualUserIdForTask}', title='${finalTaskTitle}', description='${taskDescriptionForDB}', priority='${priority}', due_date='${actualDueDateForDB}', canonical_source_id='${canonicalTaskSourceId}', s3Key='${s3Key}', source_metadata='${JSON.stringify({ action_type_hint, integration_type: integrationType, s3_key_processed: s3Key })}'`);
                 if (dbError.code === '23503' && dbError.constraint === 'tasks_user_id_fkey') {
                      console.error(`[InitialAnalysis] Foreign key violation: user_id ${actualUserIdForTask} does not exist in users table.`);
                 }
             } finally {
-                dbClient.release();
+                if (dbClient) { // Ensure dbClient was successfully acquired before trying to release
+                    dbClient.release();
+                }
             }
         } else {
             console.log(`[InitialAnalysis] Item from ${s3Key} (canonical: ${canonicalTaskSourceId}) deemed not actionable by Gemini or error occurred. Reason: ${analysisResult?.error || 'Not actionable'}`);
         }
-    }
+    } // end for loop over records
     return { statusCode: 200, body: "Processing complete." };
 };
-
-

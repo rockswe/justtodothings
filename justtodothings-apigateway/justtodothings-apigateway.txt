@@ -15,18 +15,18 @@
     /callback
       GET
   /gmail
-    DELETE
     GET
+    DELETE
     /callback
       GET
   /slack
-    DELETE
     GET
+    DELETE
     /callback
       GET
   /canvas
-    DELETE
     POST
+    DELETE
 
 /contact
   POST
@@ -61,14 +61,22 @@
   POST
   GET
   DELETE
-  /{task_id}
+  /{taskId}
+    GET
     PUT
     DELETE
-    GET
+    /email
+      /draft
+        /rewrite
+          POST
+    /draft-email
+      POST
+    /draft-code
+      POST
 
 /verification
   /{uuid}
     GET
 
-/proxy+
+/{proxy+}
   ANY

@@ -1,530 +1,462 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { useSearchParams, useRouter } from "next/navigation"
-import Link from "next/link"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
-import { X, BookOpen, Mail, Github, Slack } from "lucide-react"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useTheme } from "../contexts/ThemeContext"
-import { CanvasLMSInstructions } from "./canvas-lms-instructions"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
-import { settingsAPI, connectedAppsAPI, type UserSettings } from "@/services/api"
+import type React from "react"
 
-interface SettingsCardProps {
-  onClose: () => void
-  onLogout: () => void
-  onDeleteAllTodos: () => void
-  onDeleteAccount?: () => void
-  isSignedUp?: boolean
+import { useState, useEffect } from "react"
+import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Plus, Check, Reply, Send, X, RefreshCw } from "lucide-react"
+import { TaskForm } from "./task-form"
+import { useTheme } from "../contexts/ThemeContext"
+import { useTasks } from "../contexts/TaskContext"
+import type { Task } from "@/services/api"
+import { useDraggable, useDroppable } from "@dnd-kit/core"
+import { Textarea } from "@/components/ui/textarea"
+import { useToast } from "@/hooks/use-toast"
+import { taskAPI } from "@/services/api"
+
+interface TaskColumnProps {
+  title: "low" | "medium" | "important"
+  todos: Task[]
 }
 
-type Category = "general" | "connectedApps"
-type ConnectedApp = "canvas" | "gmail" | "github" | "slack"
+export function TaskColumn({ title, todos }: TaskColumnProps) {
+  const [isFormOpen, setIsFormOpen] = useState(false)
+  const [editingTaskId, setEditingTaskId] = useState<number | null>(null)
+  const [hoveredTaskId, setHoveredTaskId] = useState<number | null>(null)
+  const { theme } = useTheme()
+  const { createTask, updateTask, deleteTask } = useTasks()
 
-export function SettingsCard({
-  onClose,
-  onLogout,
-  onDeleteAllTodos,
-  onDeleteAccount,
-  isSignedUp = false,
-}: SettingsCardProps) {
-  const { theme, setTheme } = useTheme()
-  const [activeCategory, setActiveCategory] = useState<Category>("general")
-  const [notifications, setNotifications] = useState(true)
-  const [showCanvasInstructions, setShowCanvasInstructions] = useState(false)
-  const [showSignUpAlert, setShowSignUpAlert] = useState(false)
-  const [showDeleteAccountAlert, setShowDeleteAccountAlert] = useState(false)
-  const [selectedApp, setSelectedApp] = useState<ConnectedApp | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [userSettings, setUserSettings] = useState<UserSettings | null>(null)
+  // Setup droppable area for this column
+  const { setNodeRef: setDroppableRef } = useDroppable({
+    id: `column-${title}`,
+    data: {
+      type: "column",
+      priority: title,
+    },
+  })
 
-  const searchParams = useSearchParams()
-  const router = useRouter()
-
-  const fetchSettings = useCallback(async () => {
-    if (!isSignedUp) {
-      return
-    }
-    setIsLoading(true)
-    try {
-      const newSettings = await settingsAPI.getSettings()
-      if (!newSettings) {
-        console.error("[fetchSettings] Fetched settings data is null or undefined. Aborting update.")
-        return
-      }
-      const currentConnectedApps = newSettings.connected_apps || {}
-      setUserSettings({
-        ...newSettings,
-        connected_apps: currentConnectedApps,
-      } as UserSettings)
-      if (newSettings.theme_preference) {
-        setTheme(newSettings.theme_preference)
-      }
-      if (typeof newSettings.notifications_enabled === "boolean") {
-        setNotifications(newSettings.notifications_enabled)
-      }
-    } catch (error) {
-      console.error("Error in fetchSettings execution:", error)
-    } finally {
-      setIsLoading(false)
-    }
-  }, [isSignedUp, setTheme, setNotifications, setIsLoading, setUserSettings])
-
-  // Load settings on component mount
-  useEffect(() => {
-    if (isSignedUp) {
-      fetchSettings()
+  const handleSubmit = async (task: {
+    id?: number
+    title: string
+    description: string
+    dueDate: string
+    priority: "low" | "medium" | "important"
+  }) => {
+    if (editingTaskId !== null) {
+      await updateTask(editingTaskId, {
+        title: task.title,
+        description: task.description,
+        priority: title,
+        due_date: task.dueDate,
+      })
+      setEditingTaskId(null)
     } else {
-      // For non-signed-up users, use localStorage for theme preference
-      const savedTheme = localStorage.getItem("theme") as "dark" | "light" | null
-      if (savedTheme) {
-        setTheme(savedTheme)
-      }
-
-      // For non-signed-up users, default notifications to true
-      setNotifications(true)
+      await createTask({
+        title: task.title,
+        description: task.description,
+        priority: title,
+        due_date: task.dueDate,
+      })
     }
-  }, [isSignedUp, setTheme, fetchSettings])
-
-  // Effect to handle OAuth redirect
-  useEffect(() => {
-    const app = searchParams.get("app")
-    const status = searchParams.get("status")
-    const message = searchParams.get("message")
-
-    if (app && status) {
-      const newSearchParams = new URLSearchParams(searchParams.toString())
-      newSearchParams.delete("app")
-      newSearchParams.delete("status")
-      newSearchParams.delete("message")
-
-      const newUrl = `${window.location.pathname}?${newSearchParams.toString()}`.replace(/\?$/, "") // Remove trailing '?' if no params left
-      router.replace(newUrl, { scroll: false }) // Clean URL immediately
-
-      if (status === "success" && ["gmail", "github", "slack", "canvas"].includes(app)) {
-        fetchSettings() // Call the memoized fetchSettings
-      } else if (status === "error") {
-        console.error(`OAuth error for ${app}: ${message || "Unknown error"}`)
-        // Optionally: Display a toast to the user with the error message
-      }
-    }
-  }, [searchParams, router, fetchSettings]) // Dependencies for the OAuth effect
-
-  const handleThemeChange = async (value: string) => {
-    setTheme(value as "dark" | "light")
-
-    if (isSignedUp) {
-      try {
-        const updatedSettings = await settingsAPI.updateSettings({ theme_preference: value as "dark" | "light" })
-        setUserSettings(updatedSettings)
-      } catch (error) {
-        console.error("Error updating theme:", error)
-      }
-    } else {
-      // For non-signed-up users, store theme in localStorage
-      localStorage.setItem("theme", value)
-    }
+    setIsFormOpen(false)
   }
 
-  const handleNotificationsToggle = async () => {
-    const newValue = !notifications
-    setNotifications(newValue)
-
-    if (isSignedUp) {
-      try {
-        const updatedSettings = await settingsAPI.updateSettings({ notifications_enabled: newValue })
-        setUserSettings(updatedSettings)
-      } catch (error) {
-        console.error("Error updating notifications:", error)
-      }
-    }
+  const handleDeleteTask = async (id: number) => {
+    await deleteTask(id)
+    setIsFormOpen(false)
+    setEditingTaskId(null)
   }
 
-  const handleAppConnection = (app: ConnectedApp) => {
-    if (!isSignedUp) {
-      setShowSignUpAlert(true)
-      return
-    }
-
-    // Ensure this uses NEXT_PUBLIC_ for client-side access
-    const effectiveApiUrl = process.env.NEXT_PUBLIC_API_URL || "https://api.justtodothings.com"
-
-    if (isAppConnected(app)) {
-      handleDisconnectApp(app)
-    } else {
-      setSelectedApp(app)
-      if (app === "canvas") {
-        setShowCanvasInstructions(true)
-      } else if (app === "gmail") {
-        window.location.href = new URL("/connected-apps/gmail", effectiveApiUrl).href
-      } else if (app === "github") {
-        window.location.href = new URL("/connected-apps/github", effectiveApiUrl).href
-      } else if (app === "slack") {
-        window.location.href = new URL("/connected-apps/slack", effectiveApiUrl).href
-      }
-    }
-  }
-
-  const handleConnectApp = async (app: ConnectedApp, domain?: string, accessToken?: string) => {
-    if (!isSignedUp) return
-
-    try {
-      setIsLoading(true)
-      if (app === "canvas" && domain && accessToken) {
-        const result = await connectedAppsAPI.connectCanvas(domain, accessToken)
-        // Update the user settings with the new connected app data
-        if (result && userSettings) {
-          setUserSettings({
-            ...userSettings,
-            connected_apps: {
-              ...userSettings.connected_apps,
-              canvas: { canvasUserId: result.canvasUserId, domain },
-            },
-          })
-        }
-        // Refresh settings to ensure we have the latest data
-        await fetchSettings()
-      }
-    } catch (error) {
-      console.error(`Error connecting ${app}:`, error)
-    } finally {
-      setIsLoading(false)
-      setShowCanvasInstructions(false)
-    }
-  }
-
-  const handleDisconnectApp = async (app: ConnectedApp) => {
-    if (!isSignedUp) return
-
-    try {
-      setIsLoading(true)
-      if (app === "canvas") {
-        await connectedAppsAPI.disconnectCanvas()
-      } else if (app === "gmail") {
-        await connectedAppsAPI.disconnectGmail()
-      } else if (app === "github") {
-        await connectedAppsAPI.disconnectGitHub()
-      } else if (app === "slack") {
-        await connectedAppsAPI.disconnectSlack()
-      }
-
-      // Refresh settings to ensure we have the latest data
-      await fetchSettings()
-    } catch (error) {
-      console.error(`Error disconnecting ${app}:`, error)
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  const handleDeleteAccount = () => {
-    if (onDeleteAccount) {
-      onDeleteAccount()
-    }
-    setShowDeleteAccountAlert(false)
-  }
-
-  // Check if an app is connected based on the backend settings
-  const isAppConnected = (app: ConnectedApp): boolean => {
-    if (!isSignedUp || !userSettings || !userSettings.connected_apps) {
-      return false
-    }
-    return !!userSettings.connected_apps[app]
+  const handleToggleComplete = async (e: React.MouseEvent, task: Task) => {
+    e.stopPropagation() // Prevent opening the edit form
+    await updateTask(task.id, { is_completed: !task.is_completed })
   }
 
   return (
-    <Card
-      className={`w-full max-w-5xl mx-auto max-h-[80vh] flex flex-col ${
-        theme === "dark" ? "bg-[#1a1a1a] border-white/20 text-white" : "bg-white border-black/20 text-black"
-      }`}
-    >
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-2xl font-normal">settings</CardTitle>
-        <Button variant="ghost" size="icon" onClick={onClose}>
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </Button>
-      </CardHeader>
-      <CardContent className="flex flex-col md:flex-row p-4 flex-1 overflow-y-auto">
-        <div
-          className={`w-full md:w-1/4 space-y-1 pb-4 md:pb-0 border-b ${theme === "dark" ? "border-white/20" : "border-black/20"} md:border-b-0 md:border-r ${theme === "dark" ? "border-white/20" : "border-black/20"} md:pr-4`}
+    <div className="space-y-4 w-full max-w-sm flex flex-col items-center">
+      <div className="flex items-center justify-between mb-6 w-full">
+        <h2 className="text-xl text-center w-full">{title}</h2>
+        <Button
+          variant="outline"
+          size="icon"
+          className={`border-white/20 bg-transparent ${theme === "dark" ? "text-white hover:bg-transparent" : "text-black hover:bg-gray-100"}`}
+          onClick={() => {
+            setEditingTaskId(null)
+            setIsFormOpen(true)
+          }}
         >
-          <Button
-            variant="ghost"
-            className="w-full justify-center py-1 px-2 text-sm whitespace-normal"
-            onClick={() => setActiveCategory("general")}
+          <Plus className="h-4 w-4" />
+        </Button>
+      </div>
+
+      <div ref={setDroppableRef} className="w-full min-h-[200px] space-y-4">
+        {todos.length === 0 && (
+          <Card
+            className={`p-4 bg-transparent border ${theme === "dark" ? "border-white/20 text-white/60" : "border-black/20 text-black/60"} w-full`}
           >
-            general
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full justify-center py-1 px-2 text-sm whitespace-normal"
-            onClick={() => setActiveCategory("connectedApps")}
-          >
-            connected apps
-          </Button>
-        </div>
+            *blank*
+          </Card>
+        )}
 
-        <div className="w-full md:w-3/4 md:pl-5 pt-4 md:pt-0 space-y-6 overflow-y-auto pb-4">
-          {activeCategory === "general" && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center">
-                <span className="mr-4">theme</span>
-                <Select value={theme} onValueChange={handleThemeChange}>
-                  <SelectTrigger
-                    className={`w-[120px] bg-transparent ${theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"}`}
-                  >
-                    <SelectValue placeholder="Select theme" />
-                  </SelectTrigger>
-                  <SelectContent
-                    className={theme === "dark" ? "bg-[#1a1a1a] border-white/20" : "bg-white border-black/20"}
-                  >
-                    <SelectItem
-                      value="light"
-                      className={theme === "dark" ? "text-white hover:bg-white/10" : "text-black hover:bg-black/10"}
-                    >
-                      light
-                    </SelectItem>
-                    <SelectItem
-                      value="dark"
-                      className={theme === "dark" ? "text-white hover:bg-white/10" : "text-black hover:bg-black/10"}
-                    >
-                      dark
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex justify-between items-center">
-                <span>notifications</span>
-                <Switch
-                  checked={notifications}
-                  onCheckedChange={handleNotificationsToggle}
-                  className="bg-gray-600 data-[state=checked]:bg-blue-500"
-                />
-              </div>
-              <Button variant="outline" className="w-full" onClick={onDeleteAllTodos} disabled={isLoading}>
-                {isLoading ? "deleting..." : "delete all todos"}
-              </Button>
+        {todos.map((task) => (
+          <DraggableTaskCard
+            key={task.id}
+            task={task}
+            onEdit={() => {
+              setEditingTaskId(task.id)
+              setIsFormOpen(true)
+            }}
+            onToggleComplete={(e) => handleToggleComplete(e, task)}
+            onHover={(isHovered) => setHoveredTaskId(isHovered ? task.id : null)}
+            isHovered={hoveredTaskId === task.id}
+            updateTask={updateTask}
+          />
+        ))}
+      </div>
 
-              {/* Only show logout button if user is signed up */}
-              {isSignedUp && (
-                <Button variant="outline" className="w-full" onClick={onLogout} disabled={isLoading}>
-                  {isLoading ? "logging out..." : "log out"}
-                </Button>
-              )}
-
-              {isSignedUp && (
-                <Button
-                  variant="destructive"
-                  className="w-full bg-red-700 hover:bg-red-800"
-                  onClick={() => setShowDeleteAccountAlert(true)}
-                  disabled={isLoading}
-                >
-                  {isLoading ? "deleting..." : "delete account"}
-                </Button>
-              )}
-            </div>
-          )}
-
-          {activeCategory === "connectedApps" && (
-            <div className="space-y-6">
-              <div
-                className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4 italic border-l-2 pl-3 ${theme === "dark" ? "border-white/20" : "border-black/20"}`}
-              >
-                <p>
-                  Please see our{" "}
-                  <Link
-                    href="/privacy-policy"
-                    className={`underline hover:${theme === "dark" ? "text-white" : "text-black"}`}
-                    onClick={onClose}
-                  >
-                    Privacy Policy
-                  </Link>{" "}
-                  for security concerns
-                </p>
-              </div>
-              <div>
-                <h3 className="font-semibold mb-2 flex items-center gap-2">
-                  <BookOpen className="h-4 w-4" />
-                  <span>canvas lms</span>
-                </h3>
-                <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
-                  follow your university course pace with AI-powered automation. context-aware task generation, where
-                  student productivity is boosted by providing personalized insights, such as relevant assignment
-                  reminders, suggested study priorities, and timely progress updates.
-                </p>
-                <Button
-                  variant={isAppConnected("canvas") ? "destructive" : "outline"}
-                  className={`w-full ${isAppConnected("canvas") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
-                  onClick={() => handleAppConnection("canvas")}
-                  disabled={isLoading}
-                >
-                  {isLoading && selectedApp === "canvas"
-                    ? "processing..."
-                    : isAppConnected("canvas")
-                      ? "disconnect"
-                      : "connect"}
-                </Button>
-                {isAppConnected("canvas") && userSettings?.connected_apps?.canvas && (
-                  <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
-                    connected to {userSettings.connected_apps.canvas.domain}
-                  </p>
-                )}
-              </div>
-              <div>
-                <h3 className="font-semibold mb-2 flex items-center gap-2">
-                  <Mail className="h-4 w-4" />
-                  <span>gmail</span>
-                </h3>
-                <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
-                  justtodothings simplifies task management by seamlessly integrating gmail with AI. the AI analyzes
-                  your recent emails, extracts key points, and generates concise to-dos, helping you stay organized and
-                  focused effortlessly.
-                </p>
-                <Button
-                  variant={isAppConnected("gmail") ? "destructive" : "outline"}
-                  className={`w-full ${isAppConnected("gmail") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
-                  onClick={() => handleAppConnection("gmail")}
-                  disabled={isLoading}
-                >
-                  {isLoading && selectedApp === "gmail"
-                    ? "processing..."
-                    : isAppConnected("gmail")
-                      ? "disconnect"
-                      : "connect"}
-                </Button>
-                {isAppConnected("gmail") && userSettings?.connected_apps?.gmail && (
-                  <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
-                    connected to {userSettings.connected_apps.gmail.email}
-                  </p>
-                )}
-              </div>
-              <div>
-                <h3 className="font-semibold mb-2 flex items-center gap-2">
-                  <Github className="h-4 w-4" />
-                  <span>github</span>
-                </h3>
-                <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
-                  connect your github account to automatically create tasks from issues and pull requests. stay on top
-                  of your development workflow by tracking code reviews, issue assignments, and project milestones.
-                </p>
-                <Button
-                  variant={isAppConnected("github") ? "destructive" : "outline"}
-                  className={`w-full ${isAppConnected("github") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
-                  onClick={() => handleAppConnection("github")}
-                  disabled={isLoading}
-                >
-                  {isLoading && selectedApp === "github"
-                    ? "processing..."
-                    : isAppConnected("github")
-                      ? "disconnect"
-                      : "connect"}
-                </Button>
-                {isAppConnected("github") && userSettings?.connected_apps?.github && (
-                  <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
-                    connected as {userSettings.connected_apps.github.login}
-                  </p>
-                )}
-              </div>
-              <div>
-                <h3 className="font-semibold mb-2 flex items-center gap-2">
-                  <Slack className="h-4 w-4" />
-                  <span>slack</span>
-                </h3>
-                <p className={`text-sm ${theme === "dark" ? "text-white/70" : "text-black/70"} mb-4`}>
-                  integrate with slack to turn messages into actionable tasks. never miss important requests from your
-                  team and keep track of your commitments across channels and direct messages.
-                </p>
-                <Button
-                  variant={isAppConnected("slack") ? "destructive" : "outline"}
-                  className={`w-full ${isAppConnected("slack") ? "bg-red-600 hover:bg-red-700 text-white" : ""}`}
-                  onClick={() => handleAppConnection("slack")}
-                  disabled={isLoading}
-                >
-                  {isLoading && selectedApp === "slack"
-                    ? "processing..."
-                    : isAppConnected("slack")
-                      ? "disconnect"
-                      : "connect"}
-                </Button>
-                {isAppConnected("slack") && userSettings?.connected_apps?.slack && (
-                  <p className={`text-xs mt-2 ${theme === "dark" ? "text-white/50" : "text-black/50"}`}>
-                    connected to workspace {userSettings.connected_apps.slack.team_id}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      </CardContent>
-      {showCanvasInstructions && (
-        <CanvasLMSInstructions
-          onClose={() => setShowCanvasInstructions(false)}
-          onConnect={(domain, accessToken) => selectedApp && handleConnectApp(selectedApp, domain, accessToken)}
-          appType={selectedApp || "canvas"}
+      {isFormOpen && (
+        <TaskForm
+          onClose={() => {
+            setIsFormOpen(false)
+            setEditingTaskId(null)
+          }}
+          onSubmit={handleSubmit}
+          onDelete={handleDeleteTask}
+          editTask={editingTaskId !== null ? todos.find((t) => t.id === editingTaskId) : undefined}
+          priority={title}
         />
       )}
-      <AlertDialog open={showSignUpAlert} onOpenChange={setShowSignUpAlert}>
-        <AlertDialogContent className={theme === "dark" ? "bg-[#1a1a1a] text-white" : "bg-white text-black"}>
-          <AlertDialogHeader>
-            <AlertDialogTitle className={theme === "dark" ? "text-white" : "text-black"}>
-              sign up required
-            </AlertDialogTitle>
-            <AlertDialogDescription className={theme === "dark" ? "text-white/70" : "text-black/70"}>
-              you have to sign up first to connect to apps.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction
-              onClick={() => setShowSignUpAlert(false)}
-              className={
-                theme === "dark" ? "bg-white text-black hover:bg-white/90" : "bg-black text-white hover:bg-black/90"
-              }
-            >
-              okay
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-      <AlertDialog open={showDeleteAccountAlert} onOpenChange={setShowDeleteAccountAlert}>
-        <AlertDialogContent className={theme === "dark" ? "bg-[#1a1a1a] text-white" : "bg-white text-black"}>
-          <AlertDialogHeader>
-            <AlertDialogTitle className={theme === "dark" ? "text-white" : "text-black"}>
-              delete account
-            </AlertDialogTitle>
-            <AlertDialogDescription className={theme === "dark" ? "text-white/70" : "text-black/70"}>
-              are you sure you want to delete your account? this action cannot be undone and all your data will be
-              permanently lost.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              className={
-                theme === "dark"
-                  ? "bg-transparent border-white text-white hover:bg-white/10"
-                  : "bg-transparent border-black text-black hover:bg-black/10"
-              }
-            >
-              cancel
-            </AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteAccount} className="bg-red-600 text-white hover:bg-red-700">
-              delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </Card>
+    </div>
+  )
+}
+
+interface DraggableTaskCardProps {
+  task: Task
+  onEdit: () => void
+  onToggleComplete: (e: React.MouseEvent) => void
+  onHover: (isHovered: boolean) => void
+  isHovered: boolean
+  updateTask?: (taskId: number, updates: Partial<Task>) => Promise<Task | null>
+}
+
+function DraggableTaskCard({ task, onEdit, onToggleComplete, onHover, isHovered, updateTask }: DraggableTaskCardProps) {
+  const { theme } = useTheme()
+  const { toast } = useToast()
+
+  // Add state for email reply functionality
+  const [isReplyCanvasOpen, setIsReplyCanvasOpen] = useState(false)
+  const [currentDraft, setCurrentDraft] = useState("")
+  const [rewritePromptVisible, setRewritePromptVisible] = useState(false)
+  const [rewriteInstructions, setRewriteInstructions] = useState("")
+  const [isLoading, setIsLoading] = useState(false)
+
+  // Setup draggable for this task card
+  const {
+    attributes,
+    listeners,
+    setNodeRef: setDraggableRef,
+    isDragging,
+  } = useDraggable({
+    id: `task-${task.id}`,
+    data: {
+      type: "task",
+      task,
+    },
+  })
+
+  // Initialize currentDraft when task.generated_draft changes
+  useEffect(() => {
+    if (task.generated_draft) {
+      setCurrentDraft(task.generated_draft)
+    }
+  }, [task.generated_draft])
+
+  // Check if the task is eligible for email reply
+  const isEmailReplyEligible =
+    task.source_metadata?.integration_type === "gmail" &&
+    task.source_metadata?.action_type_hint === "email_reply_needed" &&
+    task.generated_draft &&
+    task.generated_draft.trim() !== ""
+
+  // Handle rewrite draft
+  const handleRewriteDraft = async () => {
+    if (!rewriteInstructions.trim() || !updateTask) return
+
+    setIsLoading(true)
+    try {
+      const result = await taskAPI.rewriteEmailDraft(task.id, rewriteInstructions)
+      if (result) {
+        setCurrentDraft(result.generated_draft || "")
+        setRewriteInstructions("")
+        setRewritePromptVisible(false)
+
+        // Update the task in context
+        if (updateTask) {
+          await updateTask(task.id, { generated_draft: result.generated_draft })
+        }
+
+        toast({
+          title: "Draft rewritten",
+          description: "Your email draft has been updated based on your instructions.",
+        })
+      }
+    } catch (error) {
+      console.error("Error rewriting draft:", error)
+      toast({
+        title: "Error",
+        description: "Failed to rewrite the draft. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Handle send email
+  const handleSendEmail = async () => {
+    if (!currentDraft.trim()) return
+
+    setIsLoading(true)
+    try {
+      const result = await taskAPI.sendEmailReply(task.id, currentDraft)
+
+      toast({
+        title: "Email sent",
+        description: result.message || "Your email has been sent successfully.",
+      })
+
+      setIsReplyCanvasOpen(false)
+
+      // Optimistically update the task as completed
+      if (updateTask) {
+        await updateTask(task.id, { is_completed: true })
+      }
+    } catch (error) {
+      console.error("Error sending email:", error)
+      toast({
+        title: "Error",
+        description: "Failed to send the email. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Handle generate initial draft (if needed)
+  const handleGenerateInitialDraft = async () => {
+    setIsLoading(true)
+    try {
+      const result = await taskAPI.generateInitialDraft(task.id)
+      if (result) {
+        setCurrentDraft(result.generated_draft || "")
+
+        // Update the task in context
+        if (updateTask) {
+          await updateTask(task.id, { generated_draft: result.generated_draft })
+        }
+
+        toast({
+          title: "Draft generated",
+          description: "An email draft has been generated for you.",
+        })
+      }
+    } catch (error) {
+      console.error("Error generating draft:", error)
+      toast({
+        title: "Error",
+        description: "Failed to generate a draft. Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <div className="w-full">
+      <Card
+        ref={setDraggableRef}
+        {...listeners}
+        {...attributes}
+        className={`p-4 bg-transparent border ${
+          theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"
+        } cursor-grab hover:bg-transparent w-full relative group ${isDragging ? "opacity-50" : ""}`}
+        onClick={onEdit}
+        onMouseEnter={() => onHover(true)}
+        onMouseLeave={() => onHover(false)}
+      >
+        <div className="space-y-2 break-words">
+          <h3 className={task.is_completed ? "line-through opacity-70" : ""}>{task.title}</h3>
+          <p
+            className={`text-sm ${theme === "dark" ? "text-white/60" : "text-black/60"} ${task.is_completed ? "line-through opacity-70" : ""}`}
+          >
+            {task.description}
+          </p>
+          <p
+            className={`text-xs ${theme === "dark" ? "text-white/40" : "text-black/40"} ${task.is_completed ? "line-through opacity-70" : ""}`}
+          >
+            {task.due_date
+              ? new Date(task.due_date).toLocaleString(undefined, {
+                  year: "numeric",
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })
+              : ""}
+          </p>
+
+          {/* Email Reply Button */}
+          {isEmailReplyEligible && (
+            <div className="mt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className={`w-full flex items-center justify-center gap-1 ${
+                  theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"
+                }`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setIsReplyCanvasOpen(!isReplyCanvasOpen)
+                }}
+              >
+                <Reply className="h-3 w-3" />
+                <span>Answer to Email?</span>
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Completion button that appears on hover */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className={`absolute right-2 top-2 opacity-0 group-hover:opacity-100 transition-opacity h-7 w-7 p-1 ${
+            task.is_completed
+              ? theme === "dark"
+                ? "bg-white/20 text-white hover:bg-white/10"
+                : "bg-black/20 text-black hover:bg-black/10"
+              : "hover:bg-transparent"
+          }`}
+          onClick={(e) => {
+            e.stopPropagation()
+            onToggleComplete(e)
+          }}
+        >
+          <Check className={`h-4 w-4 ${task.is_completed ? "opacity-100" : "opacity-50"}`} />
+          <span className="sr-only">{task.is_completed ? "Mark as incomplete" : "Mark as complete"}</span>
+        </Button>
+      </Card>
+
+      {/* Email Reply Canvas */}
+      {isReplyCanvasOpen && (
+        <Card
+          className={`mt-2 p-4 bg-transparent border ${
+            theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"
+          } w-full`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <h4 className="text-sm font-medium">AI-Generated Email Draft</h4>
+              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsReplyCanvasOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <Textarea
+              value={currentDraft}
+              onChange={(e) => setCurrentDraft(e.target.value)}
+              className={`min-h-[150px] bg-transparent border ${
+                theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"
+              } rounded-md p-2 text-sm`}
+              placeholder="Email draft will appear here..."
+              disabled={isLoading}
+            />
+
+            <div className="flex flex-wrap gap-2 justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                className={`${theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"}`}
+                onClick={() => setIsReplyCanvasOpen(false)}
+                disabled={isLoading}
+              >
+                reject
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className={`${theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"}`}
+                onClick={() => setRewritePromptVisible(true)}
+                disabled={isLoading}
+              >
+                <RefreshCw className="h-3 w-3 mr-1" />
+                rewrite draft?
+              </Button>
+
+              <Button
+                variant="outline"
+                size="sm"
+                className={`${
+                  theme === "dark" ? "bg-white text-black hover:bg-white/90" : "bg-black text-white hover:bg-black/90"
+                }`}
+                onClick={handleSendEmail}
+                disabled={isLoading || !currentDraft.trim()}
+              >
+                <Send className="h-3 w-3 mr-1" />
+                send
+              </Button>
+            </div>
+
+            {/* Rewrite Prompt */}
+            {rewritePromptVisible && (
+              <div className={`mt-4 p-3 rounded-md ${theme === "dark" ? "bg-white/5" : "bg-black/5"}`}>
+                <h5 className="text-sm font-medium mb-2">How would you like to improve this draft?</h5>
+                <Textarea
+                  value={rewriteInstructions}
+                  onChange={(e) => setRewriteInstructions(e.target.value)}
+                  className={`min-h-[80px] bg-transparent border ${
+                    theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"
+                  } rounded-md p-2 text-sm mb-3`}
+                  placeholder="e.g., Make it more formal, add more details about..."
+                  disabled={isLoading}
+                />
+                <div className="flex justify-end gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`${theme === "dark" ? "border-white/20 text-white" : "border-black/20 text-black"}`}
+                    onClick={() => {
+                      setRewritePromptVisible(false)
+                      setRewriteInstructions("")
+                    }}
+                    disabled={isLoading}
+                  >
+                    cancel
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={`${
+                      theme === "dark"
+                        ? "bg-white text-black hover:bg-white/90"
+                        : "bg-black text-white hover:bg-black/90"
+                    }`}
+                    onClick={handleRewriteDraft}
+                    disabled={isLoading || !rewriteInstructions.trim()}
+                  >
+                    submit rewrite
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+    </div>
   )
 }

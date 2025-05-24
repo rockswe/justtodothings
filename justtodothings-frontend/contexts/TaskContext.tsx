@@ -64,6 +64,42 @@ const exampleTasks: Task[] = [
     updated_at: new Date().toISOString(),
     is_completed: false,
   },
+  {
+    id: 1005,
+    title: "Reply to Professor Johnson",
+    description: "Respond to email about research opportunity in the physics department.",
+    priority: "important",
+    due_date: new Date("2025-02-18T12:00:00").toISOString(),
+    todo_order: 4,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    is_completed: false,
+    source_metadata: {
+      integration_type: "gmail",
+      action_type_hint: "email_reply_needed",
+      original_s3_key_user_id: "user123/emails/prof_johnson_2025_02_15.json",
+      s3_key_processed: "user123/processed/prof_johnson_2025_02_15.json",
+    },
+    generated_draft:
+      "Dear Professor Johnson,\n\nThank you for reaching out about the research opportunity in the physics department. I am very interested in learning more about this position and how I might contribute to your work.\n\nI have experience with data analysis and programming from my coursework, and I'm particularly interested in the quantum mechanics aspects you mentioned.\n\nWould it be possible to schedule a meeting to discuss this opportunity further? I'm available most afternoons next week.\n\nThank you for considering me.\n\nBest regards,\nStudent",
+  },
+  {
+    id: 1006,
+    title: "Respond to Internship Offer",
+    description: "Reply to the email from Tech Solutions about the summer internship offer.",
+    priority: "important",
+    due_date: new Date("2025-02-20T12:00:00").toISOString(),
+    todo_order: 5,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    is_completed: false,
+    source_metadata: {
+      integration_type: "gmail",
+      action_type_hint: "email_reply_needed",
+      original_s3_key_user_id: "user123/emails/tech_solutions_2025_02_14.json",
+      s3_key_processed: "user123/processed/tech_solutions_2025_02_14.json",
+    },
+  },
 ]
 
 export function TaskProvider({ children }: { children: ReactNode }) {

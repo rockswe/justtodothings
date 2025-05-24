@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     todo_order  INT            NOT NULL DEFAULT 0,
     due_date    TIMESTAMPTZ,
     source_id   TEXT, 
+    generated_draft TEXT,
     is_completed BOOLEAN       NOT NULL DEFAULT false,
     
     created_at  TIMESTAMPTZ    NOT NULL DEFAULT now(),
