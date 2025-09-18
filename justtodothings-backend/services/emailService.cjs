@@ -1,7 +1,7 @@
 "use strict";
 
 const AWS = require("aws-sdk");
-const { RESET_PASSWORD_HTML_TEMPLATE, VERIFICATION_EMAIL_TEMPLATE } = require("../config/emailTemplates.cjs");
+const { RESET_PASSWORD_HTML_TEMPLATE, VERIFICATION_EMAIL_TEMPLATE } = require("../config/emailTemplate.cjs");
 
 async function sendResetEmailHTML(toEmail, resetId) {
     const resetLink = `${process.env.APP_BASE_URL}/reset-password/${resetId}`;

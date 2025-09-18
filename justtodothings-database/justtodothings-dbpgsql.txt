@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
     is_disabled            BOOLEAN NOT NULL DEFAULT false,
     terms_accepted         BOOLEAN NOT NULL DEFAULT false,
     notifications_enabled  BOOLEAN NOT NULL DEFAULT true,
-    theme_preference       TEXT    NOT NULL DEFAULT 'light',
+    theme_preference       TEXT    NOT NULL DEFAULT 'dark',
     connected_apps         JSONB   NOT NULL DEFAULT '{}',
 
     created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
